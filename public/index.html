@@ -38,28 +38,33 @@ $('#refreshMetadata').onclick=()=>runAutoMetadata(true);
 let account=null;
 function libraryFetch(path,options={}){return fetch(path,options)}
 async function copyAppUrl(){try{await navigator.clipboard.writeText(location.origin+'/');toast('共通URLをコピーしました')}catch{toast('アドレス欄のURLをコピーして送ってください')}}
-function accountPanel(){if(!account)return;modal('アカウント','<p class="summary">'+esc(account.name)+'</p><p class="hint">ローカル開発ではこの環境に保存します。Supabase接続時はアカウントごとに保存します。</p><button class="outline" id="logout">ログアウト</button>');$('#logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.reload()};}
+function accountPanel(){if(!account)return;modal('アカウント','<p class="summary">'+esc(account.name)+'</p>'+(account.id!=='local-development'?'<button class="outline" id="setPassword">パスワードを設定・変更</button>':'')+'<button class="outline" id="logout">ログアウト</button><p id="accountStatus" role="status"></p>');if($('#setPassword'))$('#setPassword').onclick=()=>passwordForm();$('#logout').onclick=async()=>{try{const r=await fetch('/api/logout',{method:'POST'});if(!r.ok)throw Error('ログアウト処理の確認に失敗しました。画面を再読み込みしてください。');location.reload();}catch(e){$('#accountStatus').textContent=e.message;}};}
+async function authRequest(body,path='/api/session'){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();if(!r.ok){const e=Error(d.error||'処理できませんでした。時間をおいて再度お試しください。');e.status=r.status;e.retryAfterSeconds=d.retryAfterSeconds;throw e;}return d;}
+function passwordForm(){
+ modal('パスワードを設定','<form id="passwordForm"><label>新しいパスワード（12文字以上）<input name="password" type="password" autocomplete="new-password" minlength="12" required></label><label>もう一度入力<input name="confirmation" type="password" autocomplete="new-password" minlength="12" required></label><p class="hint">パスワードは認証サービスで安全に管理されます。本棚の書き出しには含まれません。</p><div class="actions"><button class="primary">パスワードを保存</button></div><p id="passwordStatus" role="status"></p></form>');
+ const form=$('#passwordForm'),message=$('#passwordStatus'),button=form.querySelector('button');
+ form.onsubmit=async e=>{e.preventDefault();if(form.elements.password.value!==form.elements.confirmation.value){message.textContent='パスワードが一致しません。';return;}button.disabled=true;try{await authRequest({password:form.elements.password.value},'/api/password');form.reset();close();toast('パスワードを保存しました。次回からメールアドレスとパスワードでログインできます。');}catch(e){message.textContent=e.message;button.disabled=false;}};
+}
+
 function confirmEmailAccount(email){
  return new Promise(resolve=>{loaded=false;$('#close').hidden=true;modal('ログインするアカウントを確認','<p class="summary" id="confirmEmail"></p><p class="hint">このメールアドレスで、あなたの本棚を開きます。</p><div class="actions"><button class="outline" id="cancelEmailLogin">キャンセル</button><button class="primary" id="confirmEmailLogin">このアカウントでログイン</button></div>');$('#confirmEmail').textContent=email;$('#cancelEmailLogin').onclick=()=>resolve(false);$('#confirmEmailLogin').onclick=()=>{const button=$('#confirmEmailLogin');button.disabled=true;button.textContent='ログインしています…';resolve(true);};});
 }
-function showSignIn(){
+function showSignIn(action='login',email=''){
  loaded=false;account=null;$('#close').hidden=true;$('#content').innerHTML='';
- modal('メールのリンクでログイン','<form id="sendLinkForm"><label>メールアドレス<input name="email" type="email" autocomplete="email" required></label><p class="hint">届いたメールのリンクを開き、表示されるメールアドレスを確認してログインしてください。数字のコードは使いません。</p><div class="actions"><button class="primary">ログインメールを送る</button></div></form><p id="loginStatus" role="status"></p>');
- const form=$('#sendLinkForm'),message=$('#loginStatus'),button=form.querySelector('button');
- function waitToRetry(seconds){button.disabled=true;const until=Date.now()+seconds*1000;const update=()=>{const remaining=Math.max(0,Math.ceil((until-Date.now())/1000));button.textContent=remaining?'再試行まで '+remaining+'秒':'ログインメールを再送';if(!remaining){button.disabled=false;return false;}return true;};update();const timer=setInterval(()=>{if(!button.isConnected||!update())clearInterval(timer);},1000);}
- form.onsubmit=async e=>{e.preventDefault();if(button.disabled)return;button.disabled=true;message.textContent='メールを送信しています…';
-  try{const r=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'send',email:form.elements.email.value.trim()})});const d=await r.json();
-   if(!r.ok){message.textContent=d.error||'メールを送信できませんでした。';
-    if(r.status===429){if(Number.isFinite(d.retryAfterSeconds)&&d.retryAfterSeconds>0)waitToRetry(d.retryAfterSeconds);else{button.textContent='送信制限中';message.textContent+=' 解除時刻は不明です。60秒後に再送できるとは限りません。追加送信せず、時間をおいてから画面を開き直してください。';}return;}
-    button.disabled=false;return;
-   }
-   message.textContent='メールを送りました。最新のメールのリンクを開いてください。リンクを開いた端末でログインできます。';waitToRetry(60);
-  }catch(e){message.textContent='送信結果を確認できませんでした。メールを確認し、時間をおいてから再度お試しください。';button.disabled=false;}
+ const signup=action==='signup',recover=action==='recover';
+ modal(signup?'新しいアカウントを登録':recover?'パスワードの設定・再設定':'メールアドレスとパスワードでログイン','<form id="authForm"><label>メールアドレス<input name="email" type="email" autocomplete="email" required></label>'+(!recover?'<label>パスワード'+(signup?'（12文字以上）':'')+'<input name="password" type="password" autocomplete="'+(signup?'new-password':'current-password')+'" '+(signup?'minlength="12"':'')+' required></label>':'')+(signup?'<label>パスワードをもう一度<input name="confirmation" type="password" autocomplete="new-password" minlength="12" required></label><p class="hint">登録後に届く確認メールのリンクを開いてください。通常のログインではメールを送りません。</p>':recover?'<p class="hint">初めてパスワードを設定する場合も使えます。メールのリンクを開くと、新しいパスワードを設定できます。</p>':'<p class="hint">以前メールリンクで利用した方は、最初に「パスワードを設定・再設定」から設定してください。</p>')+'<div class="actions"><button class="primary">'+(signup?'登録する':recover?'設定メールを送る':'ログインする')+'</button></div></form><p id="loginStatus" role="status"></p><div class="actions">'+(action!=='login'?'<button class="link" id="goLogin">ログインへ</button>':'<button class="link" id="goSignup">初めての方はこちら</button><button class="link" id="goRecover">パスワードを設定・再設定</button>')+'</div>');
+ const form=$('#authForm'),message=$('#loginStatus'),button=form.querySelector('button');form.elements.email.value=email;
+ for(const [id,target]of [['goLogin','login'],['goSignup','signup'],['goRecover','recover']])if($('#'+id))$('#'+id).onclick=()=>showSignIn(target,form.elements.email.value);
+ form.onsubmit=async e=>{e.preventDefault();if(button.disabled)return;if(signup&&form.elements.password.value!==form.elements.confirmation.value){message.textContent='パスワードが一致しません。';return;}button.disabled=true;message.textContent=recover?'設定メールを送信しています…':'確認しています…';
+  try{const d=await authRequest({action,email:form.elements.email.value.trim(),...(!recover?{password:form.elements.password.value}:{})});if(form.elements.password)form.elements.password.value='';if(form.elements.confirmation)form.elements.confirmation.value='';
+   if(d.confirmationRequired){message.textContent='確認メールを送りました。リンクを開いて登録を完了してください。登録済みの場合はログイン、またはパスワードの再設定をご利用ください。';button.textContent='確認メールをご確認ください';}
+   else if(d.sent){message.textContent='設定メールを送りました。最新のリンクを開いてパスワードを設定してください。';button.textContent='設定メールをご確認ください';}
+   else location.reload();
+  }catch(e){message.textContent=e.message;if(e.status===429&&(recover||signup)){button.textContent='メール送信制限中';if(e.retryAfterSeconds){const until=Date.now()+e.retryAfterSeconds*1000;const timer=setInterval(()=>{if(!button.isConnected){clearInterval(timer);return;}const seconds=Math.max(0,Math.ceil((until-Date.now())/1000));button.textContent=seconds?'再試行まで '+seconds+'秒':'再試行';if(!seconds){button.disabled=false;clearInterval(timer);}},1000);}}else button.disabled=false;}
  };
-
 }
 
-async function startAccount(){try{localStorage.removeItem('shiori-library-key')}catch{}try{const linked=await completeEmailLink({confirmAccount:confirmEmailAccount});const r=await fetch('/api/account');if(r.status===401){if(linked)throw Error('ログイン情報を保存できませんでした。このサイトのCookieを許可し、通常のブラウザでリンクを開いてください。');showSignIn();return}if(!r.ok)throw Error();account=await r.json();$('#accountName').textContent=account.name||'アカウント';await load()}catch(e){loaded=false;$('#close').hidden=true;modal('ログインを確認してください','<p class="summary">'+esc(e.message||'アカウント情報を読み込めませんでした。')+'</p><button class="primary" id="retryAccount">ログイン画面へ</button>');$('#retryAccount').onclick=showSignIn;}}
+async function startAccount(){try{localStorage.removeItem('shiori-library-key')}catch{}try{const linked=await completeEmailLink({confirmAccount:confirmEmailAccount});const r=await fetch('/api/account');if(r.status===401){if(linked)throw Error('ログイン情報を保存できませんでした。このサイトのCookieを許可し、通常のブラウザでリンクを開いてください。');showSignIn();return}if(!r.ok)throw Error();account=await r.json();$('#accountName').textContent=account.name||'アカウント';await load();if(linked&&linked.recovery)passwordForm()}catch(e){loaded=false;$('#close').hidden=true;modal('ログインを確認してください','<p class="summary">'+esc(e.message||'アカウント情報を読み込めませんでした。')+'</p><button class="primary" id="retryAccount">ログイン画面へ</button>');$('#retryAccount').onclick=()=>showSignIn();}}
 window.addEventListener('hashchange',()=>{if(location.hash)history.replaceState(null,'',location.pathname)});
 $('#accountButton').onclick=accountPanel;$('#shareApp').onclick=copyAppUrl;$('#mobileAccess').onclick=accountPanel;
 

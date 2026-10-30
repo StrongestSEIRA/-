@@ -13,6 +13,6 @@ async function completeEmailLink({location=window.location,history=window.histor
  const preview=await request({action:'preview',accessToken});
  if(!await confirmAccount(preview.email))return false;
  await request({accessToken,state:preview.state,confirm:true});
- return true;
+ return fragment.get('type')==='recovery'?{recovery:true}:true;
 }
 if(typeof module!=='undefined')module.exports={completeEmailLink};

@@ -21,3 +21,6 @@ test('expired email links show a recoverable error and never attempt a session e
  await assert.rejects(completeEmailLink({location:{hash:'#error=access_denied&error_description=expired',search:'',pathname:'/'},history:{replaceState(){scrubbed=true;}},fetcher:async()=>{assert.fail('Must not exchange expired links');}}),/期限切れ/);
  assert.equal(scrubbed,true);
 });
+test('verified recovery links open password setup without treating ordinary confirmation as a reset',async()=>{
+ const result=await completeEmailLink({location:{hash:'#access_token=good-token&type=recovery',search:'',pathname:'/'},history:{replaceState(){}},confirmAccount:async()=>true,fetcher:async()=>Response.json({email:'reader@example.com',state:'state',ok:true})});assert.equal(result.recovery,true);
+});

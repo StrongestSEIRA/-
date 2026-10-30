@@ -52,14 +52,14 @@ test('email link confirmation works in a new browser and binds explicit confirma
  const calls=[];
  const app=createApp({mode:'supabase',url:'https://example.supabase.co',publicKey:'public',secretKey:'secret',appUrl:'https://book-s-marker.onrender.com',fetcher:async(url,init)=>{
   calls.push({url,init});
-  if(url.includes('/otp?'))return Response.json({});
+  if(url.includes('/recover?'))return Response.json({});
   if(init.headers.Authorization==='Bearer good-token')return Response.json({id:'verified-reader',email:'reader@example.com'});
   return Response.json({code:'invalid_token'},{status:401});
  }});
  await new Promise(r=>app.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${app.address().port}`;
  const post=(body,cookie='',origin)=>fetch(base+'/api/session',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie,...(origin?{Origin:origin}:{})},body:JSON.stringify(body)});
  try{
-  const sent=await post({email:'reader@example.com'});assert.equal(sent.status,200);
+  const sent=await post({action:'recover',email:'reader@example.com'});assert.equal(sent.status,200);
   assert.equal(new URL(calls[0].url).searchParams.get('redirect_to'),'https://book-s-marker.onrender.com/');
   assert.equal(sent.headers.getSetCookie().length,0);
   // Open the email on another browser/device: no cookies from the sender.
@@ -107,7 +107,7 @@ test('auth rate limits distinguish delivery quota, per-user cooldown and unknown
  ];
  for(const c of cases){let calls=0;const app=createApp({mode:'supabase',url:'https://example.supabase.co',publicKey:'public',secretKey:'secret',fetcher:async()=>{calls++;return Response.json(c.body,{status:429,headers:c.headers});}});
   await new Promise(r=>app.listen(0,'127.0.0.1',r));
-  try{const r=await fetch(`http://127.0.0.1:${app.address().port}/api/session`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'send',email:'reader@example.com'})});
+  try{const r=await fetch(`http://127.0.0.1:${app.address().port}/api/session`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'recover',email:'reader@example.com'})});
    assert.equal(r.status,429);const d=await r.json();assert.equal(d.code,c.code);assert.match(d.error,c.message);assert.equal(d.retryAfterSeconds,c.seconds);assert.equal(r.headers.get('retry-after'),c.seconds?String(c.seconds):null);assert.ok(!JSON.stringify(d).includes('recipient-private'));assert.equal(calls,1);
   }finally{await new Promise(r=>app.close(r));}
  }
