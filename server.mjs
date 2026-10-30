@@ -8,7 +8,20 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
  if(mode==='supabase'&&(!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url)||!publicKey||!secretKey))throw Error('Supabase URL and keys are required');
  let queue=Promise.resolve();
  const send=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(value));};
- async function api(path,body,key=publicKey,token){const r=await fetcher(url+path,{method:body===undefined?'GET':'POST',headers:{apikey:key,...(token?{Authorization:`Bearer ${token}`} : {}),'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(15000)});const d=await r.json();if(!r.ok){const e=Error(d.code==='40001'?'別の画面で更新されました。再読み込みしてください。':'Supabaseへの接続に失敗しました');e.status=d.code==='40001'?409:r.status===401?401:502;throw e;}return d;}
+ async function api(path,body,key=publicKey,token){
+  const r=await fetcher(url+path,{method:body===undefined?'GET':'POST',headers:{apikey:key,...(token?{Authorization:`Bearer ${token}`} : {}),'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(15000)});
+  const d=await r.json();
+  if(!r.ok){
+   let status=502,message='Supabaseへの接続に失敗しました';
+   if(d.code==='40001'){status=409;message='別の画面で更新されました。再読み込みしてください。';}
+   else if(r.status===429){status=429;message='送信回数の上限です。しばらく待ってから再送してください。';}
+   else if(d.code==='otp_expired'||path.startsWith('/auth/v1/verify')&&[400,401,403,422].includes(r.status)){status=400;message='コードが違うか期限切れです。最後に届いたメールの数字を入力してください。';}
+   else if(r.status===401){status=401;message='ログインの有効期限が切れました。再度ログインしてください。';}
+   const e=Error(message);e.status=status;throw e;
+  }
+  return d;
+ }
+
  async function rpc(owner,action,payload={}){return api('/rest/v1/rpc/shiori_gateway',{p_owner:owner,p_action:action,p_payload:payload},secretKey,secretKey.startsWith('eyJ')?secretKey:undefined);}
  async function snapshot(owner){if(mode==='supabase'){const r=await rpc(owner,'root');return {books:r?.data?.books||[],revision:r?.version||0};}try{return JSON.parse(await readFile(new URL('library.json',dataDir),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;return {books:[],revision:0};}}
  return http.createServer(async(req,res)=>{try{
@@ -19,6 +32,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
   if(path==='/api/session'&&req.method==='POST'&&mode==='supabase'){
    const secure=req.socket.encrypted||process.env.COOKIE_SECURE==='true'?'; Secure':'';
    const cookie=(name,value,maxAge)=>`${name}=${encodeURIComponent(value)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`;
+   if(body.action==='verify'&&(typeof body.token!=='string'||!/^\d{6,10}$/.test(body.token.trim())))return send(res,400,{error:'メールに記載された数字のコードを入力してください。'});
    let session;
    if(body.accessToken){
     const expected=req.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('shiori_login='))?.slice(13);
@@ -32,7 +46,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
     await api('/auth/v1/otp?redirect_to='+encodeURIComponent(redirect.href),{email:body.email,create_user:true});
     res.setHeader('Set-Cookie',cookie('shiori_login',nonce,3600));return send(res,200,{sent:true});
    }else{
-    session=await api('/auth/v1/verify',{email:body.email,token:body.token,type:'email'});
+    session=await api('/auth/v1/verify',{email:body.email,token:typeof body.token==='string'?body.token.trim():body.token,type:'email'});
    }
    if(typeof session.access_token!=='string')return send(res,502,{error:'ログイン情報を取得できませんでした。'});
    res.setHeader('Set-Cookie',[cookie('shiori_session',session.access_token,Math.min(session.expires_in||3600,3600)),cookie('shiori_login','',0)]);return send(res,200,{ok:true});

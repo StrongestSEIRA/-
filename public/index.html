@@ -39,7 +39,24 @@ let account=null;
 function libraryFetch(path,options={}){return fetch(path,options)}
 async function copyAppUrl(){try{await navigator.clipboard.writeText(location.origin+'/');toast('共通URLをコピーしました')}catch{toast('アドレス欄のURLをコピーして送ってください')}}
 function accountPanel(){if(!account)return;modal('アカウント','<p class="summary">'+esc(account.name)+'</p><p class="hint">ローカル開発ではこの環境に保存します。Supabase接続時はアカウントごとに保存します。</p><button class="outline" id="logout">ログアウト</button>');$('#logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.reload()};}
-function showSignIn(){loaded=false;account=null;$('#close').hidden=true;$('#content').innerHTML='';modal('メールでログイン','<form id="loginForm"><label>メールアドレス<input name="email" type="email" required></label><label>メールに届いた認証コード<input name="token" autocomplete="one-time-code"></label><p class="hint">メールのログインリンクを、このブラウザで開いてください。認証コードが届いた場合は入力してログインできます。</p><button class="primary">メール送信 / ログイン</button><p id="loginStatus" role="status"></p></form>');$('#loginForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const button=e.target.querySelector('button');button.disabled=true;try{const r=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:f.get('email'),token:f.get('token')})});const d=await r.json();if(!r.ok)throw Error(d.error);if(d.sent)$('#loginStatus').textContent='メールを確認してください。';else location.reload()}catch(e){$('#loginStatus').textContent=e.message}finally{button.disabled=false}};}
+function showSignIn(){
+ loaded=false;account=null;$('#close').hidden=true;$('#content').innerHTML='';
+ modal('メールのコードでログイン','<form id="sendCodeForm"><label>メールアドレス<input name="email" type="email" autocomplete="email" required></label><div class="actions"><button class="primary">認証コードを送る</button></div></form><form id="verifyCodeForm" hidden><p id="sentEmail" class="hint"></p><label>メールに届いた数字のコード<input name="token" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,10}" required></label><p class="hint">メールのリンクを押す必要はありません。最新のメールにある数字を、この画面に入力してください。</p><div class="actions"><button type="button" class="outline" id="resendCode">コードを再送</button><button class="primary">ログインする</button></div><button type="button" class="link" id="changeEmail">メールアドレスを変更</button></form><p id="loginStatus" role="status"></p>');
+ let email='',cooldownUntil=0;
+ const sendForm=$('#sendCodeForm'),verifyForm=$('#verifyCodeForm'),message=$('#loginStatus'),resend=$('#resendCode');
+ async function request(body){const response=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.error||'処理できませんでした。時間をおいて再度お試しください。');return data;}
+ async function sendCode(){
+  const button=sendForm.querySelector('button');button.disabled=true;resend.disabled=true;message.textContent='メールを送信しています…';
+  try{await request({action:'send',email});sendForm.hidden=true;verifyForm.hidden=false;$('#sentEmail').textContent=email+' に送りました。';message.textContent='メールに届いた数字を入力してください。';cooldownUntil=Date.now()+60000;verifyForm.elements.token.focus();const timer=setInterval(()=>{if(!resend.isConnected){clearInterval(timer);return;}const seconds=Math.max(0,Math.ceil((cooldownUntil-Date.now())/1000));resend.textContent=seconds?'再送まで '+seconds+'秒':'コードを再送';if(!seconds){resend.disabled=false;clearInterval(timer);}},1000);}
+  catch(e){message.textContent=e.message;resend.disabled=false;}
+  finally{button.disabled=false;}
+ }
+ sendForm.onsubmit=e=>{e.preventDefault();email=sendForm.elements.email.value.trim();sendCode();};
+ resend.onclick=()=>{if(Date.now()>=cooldownUntil)sendCode();};
+ $('#changeEmail').onclick=()=>{verifyForm.hidden=true;sendForm.hidden=false;message.textContent='';sendForm.elements.email.focus();};
+ verifyForm.onsubmit=async e=>{e.preventDefault();const button=verifyForm.querySelector('button.primary');button.disabled=true;message.textContent='コードを確認しています…';try{await request({action:'verify',email,token:verifyForm.elements.token.value.trim()});location.reload();}catch(e){message.textContent=e.message;button.disabled=false;}};
+}
+
 async function startAccount(){try{localStorage.removeItem('shiori-library-key')}catch{}try{await completeEmailLink();const r=await fetch('/api/account');if(r.status===401){showSignIn();return}if(!r.ok)throw Error();account=await r.json();$('#accountName').textContent=account.name||'アカウント';await load()}catch(e){loaded=false;$('#close').hidden=true;modal('ログインを確認してください','<p class="summary">'+esc(e.message||'アカウント情報を読み込めませんでした。')+'</p><button class="primary" id="retryAccount">ログイン画面へ</button>');$('#retryAccount').onclick=showSignIn;}}
 window.addEventListener('hashchange',()=>{if(location.hash)history.replaceState(null,'',location.pathname)});
 $('#accountButton').onclick=accountPanel;$('#shareApp').onclick=copyAppUrl;$('#mobileAccess').onclick=accountPanel;

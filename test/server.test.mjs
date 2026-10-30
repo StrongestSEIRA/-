@@ -72,3 +72,23 @@ test('email links use the deployed URL and require both login state and a verifi
   assert.ok(cookies.some(s=>s.startsWith('shiori_login=;')&&s.includes('Max-Age=0')));
  }finally{await new Promise(r=>app.close(r));}
 });
+test('code verification never sends a new email when code is missing or malformed',async()=>{
+ let calls=0;
+ const app=createApp({mode:'supabase',url:'https://example.supabase.co',publicKey:'public',secretKey:'secret',fetcher:async()=>{calls++;return Response.json({});}});
+ await new Promise(r=>app.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${app.address().port}`;
+ try{for(const token of ['',undefined,'not-a-code','123']){const r=await fetch(base+'/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'verify',email:'reader@example.com',token})});assert.equal(r.status,400);}assert.equal(calls,0);}finally{await new Promise(r=>app.close(r));}
+});
+test('numeric OTP login creates a session usable by account endpoint; expired code is recoverable',async()=>{
+ let fail=false;const calls=[];
+ const app=createApp({mode:'supabase',url:'https://example.supabase.co',publicKey:'public',secretKey:'secret',fetcher:async(url,init)=>{
+  calls.push({url,init});
+  if(url.endsWith('/verify'))return fail?Response.json({code:'otp_expired'},{status:403}):Response.json({access_token:'verified-session',expires_in:3600});
+  assert.equal(init.headers.Authorization,'Bearer verified-session');return Response.json({id:'reader-id',email:'reader@example.com'});
+ }});
+ await new Promise(r=>app.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${app.address().port}`;
+ const verify=()=>fetch(base+'/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'verify',email:'reader@example.com',token:' 12345678 '})});
+ try{const r=await verify();assert.equal(r.status,200);assert.equal(JSON.parse(calls[0].init.body).token,'12345678');const cookie=r.headers.getSetCookie().find(s=>s.startsWith('shiori_session=')).split(';')[0];
+  const account=await fetch(base+'/api/account',{headers:{Cookie:cookie}});assert.equal(account.status,200);assert.equal((await account.json()).id,'reader-id');
+  fail=true;const expired=await verify();assert.equal(expired.status,400);assert.match((await expired.json()).error,/コードが違うか期限切れ/);
+ }finally{await new Promise(r=>app.close(r));}
+});
