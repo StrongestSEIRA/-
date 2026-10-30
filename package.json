@@ -1,0 +1,12 @@
+{
+  "name": "shiori",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --use-env-proxy --env-file-if-exists=.env server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=24.5"
+  }
+}
