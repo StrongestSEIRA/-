@@ -48,26 +48,31 @@ test('Supabase gateway uses verified owner and root revision when saving',async(
   assert.equal(calls.find(c=>c.body.p_action==='apply').body.p_payload.operations[0].action,'create');
  }finally{await new Promise(r=>app.close(r));}
 });
-test('email links use the deployed URL and require both login state and a verified Supabase token',async()=>{
+test('email link confirmation works in a new browser and binds explicit confirmation to the verified token',async()=>{
  const calls=[];
  const app=createApp({mode:'supabase',url:'https://example.supabase.co',publicKey:'public',secretKey:'secret',appUrl:'https://book-s-marker.onrender.com',fetcher:async(url,init)=>{
   calls.push({url,init});
   if(url.includes('/otp?'))return Response.json({});
-  if(init.headers.Authorization==='Bearer good-token')return Response.json({id:'verified-reader'});
+  if(init.headers.Authorization==='Bearer good-token')return Response.json({id:'verified-reader',email:'reader@example.com'});
   return Response.json({code:'invalid_token'},{status:401});
  }});
  await new Promise(r=>app.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${app.address().port}`;
- const post=(body,cookie='')=>fetch(base+'/api/session',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify(body)});
+ const post=(body,cookie='',origin)=>fetch(base+'/api/session',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie,...(origin?{Origin:origin}:{})},body:JSON.stringify(body)});
  try{
   const sent=await post({email:'reader@example.com'});assert.equal(sent.status,200);
-  const loginCookie=sent.headers.getSetCookie()[0].split(';')[0];const state=loginCookie.split('=')[1];
-  const redirect=new URL(new URL(calls[0].url).searchParams.get('redirect_to'));
-  assert.equal(redirect.origin,'https://book-s-marker.onrender.com');assert.equal(redirect.searchParams.get('login_state'),state);
-  assert.equal((await post({accessToken:'good-token',state:'wrong'},loginCookie)).status,400);
-  assert.equal((await post({accessToken:'good-token',state})).status,400);
-  assert.equal(calls.length,1);
-  assert.equal((await post({accessToken:'bad-token',state},loginCookie)).status,401);
-  const loggedIn=await post({accessToken:'good-token',state},loginCookie);assert.equal(loggedIn.status,200);
+  assert.equal(new URL(calls[0].url).searchParams.get('redirect_to'),'https://book-s-marker.onrender.com/');
+  assert.equal(sent.headers.getSetCookie().length,0);
+  // Open the email on another browser/device: no cookies from the sender.
+  const preview=await post({action:'preview',accessToken:'good-token'});assert.equal(preview.status,200);
+  const {email,state}=await preview.json();assert.equal(email,'reader@example.com');assert.ok(state);
+  const cookie=preview.headers.getSetCookie()[0].split(';')[0];assert.ok(cookie.startsWith('shiori_login='));
+  assert.equal((await post({accessToken:'good-token',state,confirm:true})).status,400);
+  assert.equal((await post({accessToken:'good-token',state},cookie)).status,400);
+  assert.equal((await post({accessToken:'good-token',state:'wrong',confirm:true},cookie)).status,400);
+  assert.equal((await post({accessToken:'different-token',state,confirm:true},cookie)).status,400);
+  assert.equal((await post({accessToken:'good-token',state,confirm:true},cookie,'https://evil.example')).status,403);
+  const rejected=await post({action:'preview',accessToken:'bad-token'});assert.equal(rejected.status,401);assert.equal(rejected.headers.getSetCookie().length,0);
+  const loggedIn=await post({accessToken:'good-token',state,confirm:true},cookie);assert.equal(loggedIn.status,200);
   const cookies=loggedIn.headers.getSetCookie();assert.ok(cookies.some(s=>s.startsWith('shiori_session=good-token;')&&s.includes('HttpOnly')));
   assert.ok(cookies.some(s=>s.startsWith('shiori_login=;')&&s.includes('Max-Age=0')));
  }finally{await new Promise(r=>app.close(r));}

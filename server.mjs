@@ -1,7 +1,7 @@
 import http from 'node:http';
 import {readFile,mkdir,writeFile,rename} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 const root=new URL('./',import.meta.url);
 export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir=new URL('.data/',root),appUrl=process.env.RENDER_EXTERNAL_URL||'http://127.0.0.1:3000',fetcher=fetch}={}) {
  if(!['local','supabase'].includes(mode))throw Error('Invalid STORAGE_MODE');
@@ -35,16 +35,25 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
    if(body.action==='verify'&&(typeof body.token!=='string'||!/^\d{6,10}$/.test(body.token.trim())))return send(res,400,{error:'メールに記載された数字のコードを入力してください。'});
    let session;
    if(body.accessToken){
+    if(typeof body.accessToken!=='string')return send(res,400,{error:'ログインリンクが無効です。'});
+    const fingerprint=createHash('sha256').update(body.accessToken).digest('hex');
+    if(body.action==='preview'){
+     const user=await api('/auth/v1/user',undefined,publicKey,body.accessToken);
+     if(!user.id||!user.email)return send(res,401,{error:'ログインを確認できませんでした。'});
+     const nonce=randomUUID();
+     res.setHeader('Set-Cookie',cookie('shiori_login',nonce+'.'+fingerprint,600));
+     return send(res,200,{email:user.email,state:nonce});
+    }
     const expected=req.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('shiori_login='))?.slice(13);
-    if(typeof body.accessToken!=='string'||!expected||typeof body.state!=='string'||body.state!==expected)return send(res,400,{error:'ログインを開始したブラウザで、メールを送り直してリンクを開いてください。'});
+    if(body.confirm!==true||!expected||typeof body.state!=='string'||expected!==body.state+'.'+fingerprint)return send(res,400,{error:'ログイン確認を完了できませんでした。Cookieを許可したブラウザでメールのリンクを開き直してください。'});
     const user=await api('/auth/v1/user',undefined,publicKey,body.accessToken);
     if(!user.id)return send(res,401,{error:'ログインを確認できませんでした。'});
     session={access_token:body.accessToken,expires_in:3600};
    }else if(!body.token){
     if(typeof body.email!=='string'||!body.email.includes('@')||body.email.length>320)return send(res,400,{error:'メールアドレスを入力してください。'});
-    const nonce=randomUUID();const redirect=new URL('/',appUrl);redirect.searchParams.set('login_state',nonce);
+    const redirect=new URL('/',appUrl);
     await api('/auth/v1/otp?redirect_to='+encodeURIComponent(redirect.href),{email:body.email,create_user:true});
-    res.setHeader('Set-Cookie',cookie('shiori_login',nonce,3600));return send(res,200,{sent:true});
+    return send(res,200,{sent:true});
    }else{
     session=await api('/auth/v1/verify',{email:body.email,token:typeof body.token==='string'?body.token.trim():body.token,type:'email'});
    }

@@ -1,48 +1,55 @@
 # 栞 — わたしの本棚
 
-公開されていたHTMLを回収し、Node.jsサーバーを再実装した復旧版です。元サーバーのソースを復元したものではありません。
+公開HTMLを回収し、Node.jsサーバーを再実装した復旧版です。元サーバーのソースを復元したものではありません。
 
-## ローカル開発
+## 開発と起動
 
-Node.js 24.5以降で `npm start`。追加パッケージは不要。既定では127.0.0.1:3000に限定して起動し、単一ユーザーのデータを `.data/library.json` に保存します。`npm test` で保存、再起動後の読み込み、競合拒否、認証境界を検証できます。
+Node.js 24.5以降で `npm start`。追加パッケージは不要です。既定のlocalモードは127.0.0.1:3000だけにバインドし、単一ユーザーのデータを `.data/library.json` に保存します。公開しないでください。テストは `npm test`。
 
-## Supabase
+`npm start` は環境に設定されたHTTP(S)プロキシとCA設定を使います。キーやプロキシプレースホルダーをファイルに書き出さないでください。
 
-`.env.example` を `.env` にコピーし、STORAGE_MODE=supabase、SUPABASE_URL、SUPABASE_PUBLIC_KEY、SUPABASE_SECRET_KEYを設定します。キーはGitに登録しないでください。秘密キーはサーバーからRPCを呼び出すためだけに使用し、HTMLには配信しません。公開HTTPSで運用するときはCOOKIE_SECURE=trueを設定してください。認証メールの送信設定が必要です。SupabaseのAuthentication → URL ConfigurationでSite URLを `https://book-s-marker.onrender.com/`、Redirect URLsに `https://book-s-marker.onrender.com/**` を設定してください。メールのログインリンクをログイン開始と同じブラウザで開けます。リンク先にはRenderのRENDER_EXTERNAL_URLが使われます。コード入力式のテンプレートも使用できます。セッション失効時は再ログインしてください。
+## 公開環境
 
-`db/schema.sql` は提供されたSQLの保管用コピーです。既に実行済みのDBには再実行しないでください。この復旧版は既存のshiori_gateway RPCとrootsテーブルに、認証済みユーザーID別の本棚スナップショットを保存します。既存のbooks/notesへの正規化や大規模データのページ分割は未実装です。リビジョンを使い古い画面からの上書きを拒否します。
+RenderのGitHubブランチは `codex/restore-shiori`。Build Commandは `npm install`、Start Commandは `npm start`。
 
-## 復旧範囲と未完了
+環境変数:
 
-本棚、メモ、タグ、画像手動追加、JSONバックアップの画面を回収済み。旧ChatGPTログインのサーバー実装は取得できないためSupabaseメール認証へ変更しました。書誌自動取得のAPIは未実装で未一致を返します。写真OCRは回収したブラウザ側の外部ライブラリに依存し、未検証です。
+- NODE_VERSION=24.19.0
+- STORAGE_MODE=supabase
+- SUPABASE_URL=https://uuvdwdrmdzkxclohhihj.supabase.co
+- SUPABASE_PUBLIC_KEY: Supabase Publishable key
+- SUPABASE_SECRET_KEY: Supabase Secret key（サーバー専用。HTMLに配信しません）
+- COOKIE_SECURE=true
 
-Supabase実接続、実メール認証、ブラウザ操作、既存公開URLへのデプロイは未検証・未実施です。現行の公開アプリは変更していません。
+`db/schema.sql` は提供されたSQLの保管用コピーです。既に初期化済みのDBには再実行しないでください。既存のshiori_gateway RPCとrootsテーブルで、認証済みユーザーID別に本棚スナップショットを保存します。既存のbooks/notesへの正規化や大規模データのページ分割は未実装です。
 
-接続先: `https://uuvdwdrmdzkxclohhihj.supabase.co`。このクラウド環境では `npm start` が Node の環境プロキシ対応を有効にし、注入されたHTTPSプロキシとCA設定を使います。新形式のPublishable keyはSUPABASE_PUBLIC_KEY、Secret keyはSUPABASE_SECRET_KEYに設定してください。プロキシシークレットのプレースホルダーをファイルに保存しないでください。
+## ログイン
 
-## 実接続の検証記録
+Supabaseの標準メールテンプレートをそのまま使用します。数字のコードのためのテンプレート編集やカスタムSMTPの導入は、このログイン手順には不要です。
 
-設定済み環境で `node --use-env-proxy scripts/check-supabase.mjs --write-check` を実行できます。書き込み検証は一時所有者の本棚を作成し、読み戻し・更新後に削除します。監査履歴は残ります。キーの値は出力しません。
+SupabaseのAuthentication → URL Configuration:
 
-Supabase認証設定への接続、実データの保存・読み戻し・更新・削除、およびSupabaseモードでのサーバー起動を確認しました。HTTP /healthは200、未ログインの/api/accountは401、画面の配信は200です。メールの受信・コード入力からのログインと公開URLへの反映は未検証です。
+- Site URL: `https://book-s-marker.onrender.com/`
+- Redirect URLs: `https://book-s-marker.onrender.com/**`
 
-既知の制限: DBに意図的に古いversionを送った場合のSQLSTATE 40001応答が、この接続経路ではタイムアウトしました（Nodeとcurlの両方で再現）。通常の保存処理は書き込み前にrevisionを確認して409を返しますが、複数サーバーから同時更新した際のDB競合応答は未解決です。タイムアウト時は保存結果を確定できないため、画面を再読み込みしてから編集してください。自動再送はしません。
+1. アプリでメールアドレスを入力し「ログインメールを送る」。
+2. 最新メールのリンクを開く。
+3. アプリに表示されたメールアドレスを確認し「このアカウントでログイン」。
 
-メールリンク対応: フラグメントのアクセストークンをURLから消去してからサーバーに送信し、Supabaseで検証した後にHttpOnly Cookieを作成します。ログイン開始時のnonceと一致しないリンクは拒否します。メール実受信からの実機ログインは利用者による確認が必要です。
+ログインを始めた端末とメールを開いた端末が異なっても、リンクを開いた側のブラウザで確認・ログインを完了できます。送信元端末のCookieを必要としません。リンクのトークンはURLから消去後、Supabaseで検証し、明示的なアカウント確認後にHttpOnly Cookieを作ります。確認のCookieは受信側ブラウザで発行し、特定のトークンにひも付けます。他のトークン、異なるstate、未確認のログイン要求は拒否します。
 
-## 推奨ログイン手順：メールの数字を入力
+Cookieが保存されない場合は再送画面に黙って戻さず、Cookieを許可する必要がある旨を表示します。セッション失効時は再ログインが必要です。
 
-画面の「認証コードを送る」と「ログインする」を別々の操作にしました。コード確認時にコードが空でもメールを再送せず、期限切れ・誤入力はその場で表示します。6〜10桁の数字に対応します。
+## 検証
 
-SupabaseのAuthentication → Emails → Templatesで、Confirm signupとMagic Linkの本文を次のようなコード表示に変更してください。アプリからメール本文のテンプレート自体を変更することはできません。
+`npm test` はローカル永続化、更新競合、認証境界、新しいブラウザでのメールリンク確認、キャンセル、不正トークン、コード検証APIなどを確認します。
 
-```html
-<h2>栞へのログイン</h2>
-<p>次の認証コードを、アプリのログイン画面に入力してください。</p>
-<p style="font-size:28px;font-weight:bold;letter-spacing:4px">{{ .Token }}</p>
-<p>このメールに心当たりがない場合は無視してください。</p>
-```
+Supabase接続と書き込みは `node --use-env-proxy scripts/check-supabase.mjs --write-check` で検証できます。一時所有者の本棚を作成し、読み戻し・更新後に削除します。監査履歴は残ります。キーの値は出力しません。
 
-最新メールの数字をアプリに入力します。メールのリンクを押す必要はありません。再送は60秒待ちますが、Supabase側の送信上限が優先されます。
+実Supabaseの管理APIでメール送信なしの一時テストユーザーと標準メールリンクを生成し、検証用リンクを開いたときのリダイレクトから、ブラウザ側ヘルパー、サーバー側の確認処理、認証後のアカウント取得まで成功しました。送信元Cookieなしで検証し、テストユーザーは削除済みです。コード入力によるログインと認証後の本棚保存・読み戻しも検証済みです。利用者の実端末からのメール受信・画面操作は別途確認が必要です。
 
-実環境の追加検証: Supabase管理APIでメール送信なしの一時テストユーザー・OTPを作成し、アプリのPOST /api/sessionによる検証、Cookieを使ったGET /api/account、本棚の保存と読み戻しに成功しました。テストユーザーと本棚は削除済みです（DB監査履歴は保持）。利用者宛てメールの配信と本文の確認は未実施です。
+## 残る制限
+
+書誌自動取得のAPIは未実装で未一致を返します。写真OCRは回収したブラウザ側の外部ライブラリに依存し、未検証です。旧ChatGPTログインはSupabaseメール認証へ変更しています。
+
+DBに意図的に古いversionを送るとSQLSTATE 40001応答がタイムアウトする問題が、この接続経路でNodeとcurlの両方に再現しました。通常保存は書き込み前にrevisionを確認して409を返しますが、複数サーバーから同時更新した際のDB競合応答は未解決です。タイムアウト時は自動再送せず、再読み込みして保存状況を確認してください。
