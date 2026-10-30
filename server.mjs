@@ -34,6 +34,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
    }
    else if(d.code==='invalid_credentials'||path.includes('grant_type=password')&&r.status===400){status=401;message='メールアドレスまたはパスワードが違います。';}
    else if(d.code==='email_not_confirmed'){status=403;message='メールアドレスの確認が必要です。確認メールのリンクを開いてからログインしてください。';}
+   else if(d.code==='email_address_not_authorized'){status=400;message='この宛先には標準メール配信から送れません。管理者によるメール配信設定が必要です。';}
    else if(d.code==='weak_password'){status=400;message='より長く、推測されにくいパスワードを指定してください。';}
    else if(d.code==='otp_expired'||path.startsWith('/auth/v1/verify')&&[400,401,403,422].includes(r.status)){status=400;message='コードが違うか期限切れです。最後に届いたメールの数字を入力してください。';}
    else if(path.includes('grant_type=refresh_token')&&[400,401,403].includes(r.status)){status=401;message='ログインの有効期限が切れました。再度ログインしてください。';}
@@ -81,13 +82,13 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
     if(!validEmail(body.email))return send(res,400,{error:'メールアドレスを入力してください。'});
     if(body.action==='recover'){
      await api('/auth/v1/recover?redirect_to='+encodeURIComponent(new URL('/',appUrl).href),{email:body.email});
-     return send(res,200,{sent:true});
+     return send(res,200,{recoveryRequested:true});
     }
     if(typeof body.password!=='string'||!body.password||Buffer.byteLength(body.password,'utf8')>1024)return send(res,400,{error:'パスワードを入力してください。'});
     if(body.action==='signup'){
      if(!validNewPassword(body.password))return send(res,400,{error:'パスワードは12文字以上、UTF-8で72バイト以内にしてください。'});
      session=await api('/auth/v1/signup?redirect_to='+encodeURIComponent(new URL('/',appUrl).href),{email:body.email,password:body.password});
-     if(!session.access_token)return send(res,200,{confirmationRequired:true});
+     if(!session.access_token)return send(res,200,{signupRequested:true});
     }else session=await api('/auth/v1/token?grant_type=password',{email:body.email,password:body.password});
    }else if(body.accessToken){
     if(typeof body.accessToken!=='string')return send(res,400,{error:'ログインリンクが無効です。'});

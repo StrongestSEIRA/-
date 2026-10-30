@@ -25,7 +25,7 @@ test('wrong password is rejected generically; signup validates before public sig
   const wrong=await post(base,'/api/session',{action:'login',email:'reader@example.com',password:fixturePassword});assert.equal(wrong.status,401);assert.equal(wrong.headers.getSetCookie().length,0);assert.match((await wrong.json()).error,/メールアドレスまたはパスワード/);
   for(const password of ['short','x'.repeat(73)])assert.equal((await post(base,'/api/session',{action:'signup',email:'reader@example.com',password})).status,400);
   assert.equal(calls,1);
-  const signup=await post(base,'/api/session',{action:'signup',email:'reader@example.com',password:fixturePassword});assert.deepEqual(await signup.json(),{confirmationRequired:true});assert.equal(signup.headers.getSetCookie().length,0);assert.equal(calls,2);
+  const signup=await post(base,'/api/session',{action:'signup',email:'reader@example.com',password:fixturePassword});assert.deepEqual(await signup.json(),{signupRequested:true});assert.equal(signup.headers.getSetCookie().length,0);assert.equal(calls,2);
  });
 });
 test('expired session refreshes once for concurrent requests without email or password',async()=>{
@@ -57,5 +57,16 @@ test('password change requires authenticated user and uses user-scoped PUT; logo
 test('old email-only login pages cannot send additional login mail after password migration',async()=>{
  let calls=0;await running({fetcher:async()=>{calls++;return Response.json({});}},async base=>{
   const r=await post(base,'/api/session',{action:'send',email:'reader@example.com'});assert.equal(r.status,410);assert.match((await r.json()).error,/再読み込み/);assert.equal(calls,0);
+ });
+});
+test('duplicate signup success does not claim mail delivery or overwrite an existing password',async()=>{
+ const calls=[];await running({fetcher:async(url,init)=>{calls.push({url,init});return Response.json({id:'obfuscated-user',identities:[],email_confirmed_at:null});}},async base=>{
+  const r=await post(base,'/api/session',{action:'signup',email:'existing@example.com',password:fixturePassword});assert.equal(r.status,200);assert.deepEqual(await r.json(),{signupRequested:true});assert.equal(r.headers.getSetCookie().length,0);assert.equal(calls.length,1);assert.ok(calls[0].url.includes('/signup?'));assert.equal(calls[0].init.method,'POST');assert.equal(calls[0].init.headers.apikey,config.publicKey);
+ });
+});
+test('recovery acknowledgement does not claim confirmed mail delivery; unauthorized destination is actionable and redacted',async()=>{
+ let reject=false;const calls=[];await running({fetcher:async(url,init)=>{calls.push({url,init});return reject?Response.json({code:'email_address_not_authorized',msg:'private-recipient@example.com is not authorized'},{status:400}):Response.json({});}},async base=>{
+  const r=await post(base,'/api/session',{action:'recover',email:'existing@example.com'});assert.equal(r.status,200);assert.deepEqual(await r.json(),{recoveryRequested:true});assert.ok(calls[0].url.includes('/recover?'));assert.deepEqual(JSON.parse(calls[0].init.body),{email:'existing@example.com'});
+  reject=true;const denied=await post(base,'/api/session',{action:'signup',email:'other@example.com',password:fixturePassword});assert.equal(denied.status,400);const error=await denied.json();assert.match(error.error,/この宛先には標準メール配信から送れません/);assert.ok(!error.error.includes('private-recipient'));
  });
 });
