@@ -46,10 +46,17 @@ function showSignIn(){
  loaded=false;account=null;$('#close').hidden=true;$('#content').innerHTML='';
  modal('メールのリンクでログイン','<form id="sendLinkForm"><label>メールアドレス<input name="email" type="email" autocomplete="email" required></label><p class="hint">届いたメールのリンクを開き、表示されるメールアドレスを確認してログインしてください。数字のコードは使いません。</p><div class="actions"><button class="primary">ログインメールを送る</button></div></form><p id="loginStatus" role="status"></p>');
  const form=$('#sendLinkForm'),message=$('#loginStatus'),button=form.querySelector('button');
- form.onsubmit=async e=>{e.preventDefault();button.disabled=true;message.textContent='メールを送信しています…';
-  try{const r=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'send',email:form.elements.email.value.trim()})});const d=await r.json();if(!r.ok)throw Error(d.error||'メールを送信できませんでした。');message.textContent='メールを送りました。最新のメールのリンクを開いてください。リンクを開いた端末でログインできます。';let seconds=60;const timer=setInterval(()=>{if(!button.isConnected){clearInterval(timer);return;}seconds--;button.textContent=seconds?'再送まで '+seconds+'秒':'ログインメールを再送';if(!seconds){button.disabled=false;clearInterval(timer);}},1000);}
-  catch(e){message.textContent=e.message;button.disabled=false;}
+ function waitToRetry(seconds){button.disabled=true;const until=Date.now()+seconds*1000;const update=()=>{const remaining=Math.max(0,Math.ceil((until-Date.now())/1000));button.textContent=remaining?'再試行まで '+remaining+'秒':'ログインメールを再送';if(!remaining){button.disabled=false;return false;}return true;};update();const timer=setInterval(()=>{if(!button.isConnected||!update())clearInterval(timer);},1000);}
+ form.onsubmit=async e=>{e.preventDefault();if(button.disabled)return;button.disabled=true;message.textContent='メールを送信しています…';
+  try{const r=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'send',email:form.elements.email.value.trim()})});const d=await r.json();
+   if(!r.ok){message.textContent=d.error||'メールを送信できませんでした。';
+    if(r.status===429){if(Number.isFinite(d.retryAfterSeconds)&&d.retryAfterSeconds>0)waitToRetry(d.retryAfterSeconds);else{button.textContent='送信制限中';message.textContent+=' 解除時刻は不明です。60秒後に再送できるとは限りません。追加送信せず、時間をおいてから画面を開き直してください。';}return;}
+    button.disabled=false;return;
+   }
+   message.textContent='メールを送りました。最新のメールのリンクを開いてください。リンクを開いた端末でログインできます。';waitToRetry(60);
+  }catch(e){message.textContent='送信結果を確認できませんでした。メールを確認し、時間をおいてから再度お試しください。';button.disabled=false;}
  };
+
 }
 
 async function startAccount(){try{localStorage.removeItem('shiori-library-key')}catch{}try{const linked=await completeEmailLink({confirmAccount:confirmEmailAccount});const r=await fetch('/api/account');if(r.status===401){if(linked)throw Error('ログイン情報を保存できませんでした。このサイトのCookieを許可し、通常のブラウザでリンクを開いてください。');showSignIn();return}if(!r.ok)throw Error();account=await r.json();$('#accountName').textContent=account.name||'アカウント';await load()}catch(e){loaded=false;$('#close').hidden=true;modal('ログインを確認してください','<p class="summary">'+esc(e.message||'アカウント情報を読み込めませんでした。')+'</p><button class="primary" id="retryAccount">ログイン画面へ</button>');$('#retryAccount').onclick=showSignIn;}}

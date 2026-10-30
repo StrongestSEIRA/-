@@ -97,3 +97,18 @@ test('numeric OTP login creates a session usable by account endpoint; expired co
   fail=true;const expired=await verify();assert.equal(expired.status,400);assert.match((await expired.json()).error,/コードが違うか期限切れ/);
  }finally{await new Promise(r=>app.close(r));}
 });
+test('auth rate limits distinguish delivery quota, per-user cooldown and unknown 429 without sending real email',async()=>{
+ const cases=[
+  {body:{code:'over_email_send_rate_limit',msg:'email rate limit exceeded'},code:'email_delivery_quota',message:/2回/,seconds:undefined},
+  {body:{code:'over_email_send_rate_limit',msg:'For security purposes, you can only request this after 47 seconds.'},code:'email_send_cooldown',message:/再送間隔/,seconds:47},
+  {body:{code:'over_request_rate_limit',msg:'Too many requests'},headers:{'Retry-After':'120'},code:'auth_rate_limited',message:/認証サービス/,seconds:120},
+  {body:{code:'over_email_send_rate_limit',msg:'Unknown provider response'},code:'email_rate_limited',message:/どちら/,seconds:undefined},
+  {body:{code:'new_rate_limit',msg:'recipient-private@example.com'},headers:{'Retry-After':'invalid'},code:'auth_rate_limited',message:/解除時刻/,seconds:undefined},
+ ];
+ for(const c of cases){let calls=0;const app=createApp({mode:'supabase',url:'https://example.supabase.co',publicKey:'public',secretKey:'secret',fetcher:async()=>{calls++;return Response.json(c.body,{status:429,headers:c.headers});}});
+  await new Promise(r=>app.listen(0,'127.0.0.1',r));
+  try{const r=await fetch(`http://127.0.0.1:${app.address().port}/api/session`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'send',email:'reader@example.com'})});
+   assert.equal(r.status,429);const d=await r.json();assert.equal(d.code,c.code);assert.match(d.error,c.message);assert.equal(d.retryAfterSeconds,c.seconds);assert.equal(r.headers.get('retry-after'),c.seconds?String(c.seconds):null);assert.ok(!JSON.stringify(d).includes('recipient-private'));assert.equal(calls,1);
+  }finally{await new Promise(r=>app.close(r));}
+ }
+});
