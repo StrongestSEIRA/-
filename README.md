@@ -8,7 +8,7 @@ Node.js 24.5以降で `npm start`。追加パッケージは不要。既定で�
 
 ## Supabase
 
-`.env.example` を `.env` にコピーし、STORAGE_MODE=supabase、SUPABASE_URL、SUPABASE_PUBLIC_KEY、SUPABASE_SECRET_KEYを設定します。キーはGitに登録しないでください。秘密キーはサーバーからRPCを呼び出すためだけに使用し、HTMLには配信しません。公開HTTPSで運用するときはCOOKIE_SECURE=trueを設定してください。認証メールの送信設定と、コードを表示するSupabaseメールテンプレートが必要です。セッション失効時は再ログインしてください。
+`.env.example` を `.env` にコピーし、STORAGE_MODE=supabase、SUPABASE_URL、SUPABASE_PUBLIC_KEY、SUPABASE_SECRET_KEYを設定します。キーはGitに登録しないでください。秘密キーはサーバーからRPCを呼び出すためだけに使用し、HTMLには配信しません。公開HTTPSで運用するときはCOOKIE_SECURE=trueを設定してください。認証メールの送信設定が必要です。SupabaseのAuthentication → URL ConfigurationでSite URLを `https://book-s-marker.onrender.com/`、Redirect URLsに `https://book-s-marker.onrender.com/**` を設定してください。メールのログインリンクをログイン開始と同じブラウザで開けます。リンク先にはRenderのRENDER_EXTERNAL_URLが使われます。コード入力式のテンプレートも使用できます。セッション失効時は再ログインしてください。
 
 `db/schema.sql` は提供されたSQLの保管用コピーです。既に実行済みのDBには再実行しないでください。この復旧版は既存のshiori_gateway RPCとrootsテーブルに、認証済みユーザーID別の本棚スナップショットを保存します。既存のbooks/notesへの正規化や大規模データのページ分割は未実装です。リビジョンを使い古い画面からの上書きを拒否します。
 
@@ -27,3 +27,5 @@ Supabase実接続、実メール認証、ブラウザ操作、既存公開URLへ
 Supabase認証設定への接続、実データの保存・読み戻し・更新・削除、およびSupabaseモードでのサーバー起動を確認しました。HTTP /healthは200、未ログインの/api/accountは401、画面の配信は200です。メールの受信・コード入力からのログインと公開URLへの反映は未検証です。
 
 既知の制限: DBに意図的に古いversionを送った場合のSQLSTATE 40001応答が、この接続経路ではタイムアウトしました（Nodeとcurlの両方で再現）。通常の保存処理は書き込み前にrevisionを確認して409を返しますが、複数サーバーから同時更新した際のDB競合応答は未解決です。タイムアウト時は保存結果を確定できないため、画面を再読み込みしてから編集してください。自動再送はしません。
+
+メールリンク対応: フラグメントのアクセストークンをURLから消去してからサーバーに送信し、Supabaseで検証した後にHttpOnly Cookieを作成します。ログイン開始時のnonceと一致しないリンクは拒否します。メール実受信からの実機ログインは利用者による確認が必要です。

@@ -3,7 +3,7 @@ import {readFile,mkdir,writeFile,rename} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 const root=new URL('./',import.meta.url);
-export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir=new URL('.data/',root),fetcher=fetch}={}) {
+export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir=new URL('.data/',root),appUrl=process.env.RENDER_EXTERNAL_URL||'http://127.0.0.1:3000',fetcher=fetch}={}) {
  if(!['local','supabase'].includes(mode))throw Error('Invalid STORAGE_MODE');
  if(mode==='supabase'&&(!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url)||!publicKey||!secretKey))throw Error('Supabase URL and keys are required');
  let queue=Promise.resolve();
@@ -17,9 +17,25 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
   let body={};if(['POST','PUT'].includes(req.method)){let chunks=[],size=0;for await(const c of req){size+=c.length;if(size>8*1024*1024)return send(res,413,{error:'データは8MB以下にしてください'});chunks.push(c);}try{body=JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{return send(res,400,{error:'Invalid JSON'});}}
   if(path==='/health')return send(res,200,{ok:true,storage:mode});
   if(path==='/api/session'&&req.method==='POST'&&mode==='supabase'){
-   if(!body.token){await api('/auth/v1/otp',{email:body.email,create_user:true});return send(res,200,{sent:true});}
-   const session=await api('/auth/v1/verify',{email:body.email,token:body.token,type:'email'});
-   res.setHeader('Set-Cookie',`shiori_session=${encodeURIComponent(session.access_token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${session.expires_in}${req.socket.encrypted||process.env.COOKIE_SECURE==='true'?'; Secure':''}`);return send(res,200,{ok:true});
+   const secure=req.socket.encrypted||process.env.COOKIE_SECURE==='true'?'; Secure':'';
+   const cookie=(name,value,maxAge)=>`${name}=${encodeURIComponent(value)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`;
+   let session;
+   if(body.accessToken){
+    const expected=req.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('shiori_login='))?.slice(13);
+    if(typeof body.accessToken!=='string'||!expected||typeof body.state!=='string'||body.state!==expected)return send(res,400,{error:'ログインを開始したブラウザで、メールを送り直してリンクを開いてください。'});
+    const user=await api('/auth/v1/user',undefined,publicKey,body.accessToken);
+    if(!user.id)return send(res,401,{error:'ログインを確認できませんでした。'});
+    session={access_token:body.accessToken,expires_in:3600};
+   }else if(!body.token){
+    if(typeof body.email!=='string'||!body.email.includes('@')||body.email.length>320)return send(res,400,{error:'メールアドレスを入力してください。'});
+    const nonce=randomUUID();const redirect=new URL('/',appUrl);redirect.searchParams.set('login_state',nonce);
+    await api('/auth/v1/otp?redirect_to='+encodeURIComponent(redirect.href),{email:body.email,create_user:true});
+    res.setHeader('Set-Cookie',cookie('shiori_login',nonce,3600));return send(res,200,{sent:true});
+   }else{
+    session=await api('/auth/v1/verify',{email:body.email,token:body.token,type:'email'});
+   }
+   if(typeof session.access_token!=='string')return send(res,502,{error:'ログイン情報を取得できませんでした。'});
+   res.setHeader('Set-Cookie',[cookie('shiori_session',session.access_token,Math.min(session.expires_in||3600,3600)),cookie('shiori_login','',0)]);return send(res,200,{ok:true});
   }
   if(path==='/api/logout'&&req.method==='POST'){res.setHeader('Set-Cookie','shiori_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return send(res,200,{ok:true});}
   if(path.startsWith('/api/')){
@@ -38,6 +54,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
    if(path==='/api/metadata'&&req.method==='POST')return send(res,200,{status:'unmatched',checkedAt:new Date().toISOString(),coverChecked:true});
    return send(res,404,{error:'Not found'});
   }
+  if(path==='/auth.js'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-store'});res.end(await readFile(new URL('public/auth.js',root)));return;}
   if(path==='/'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(await readFile(new URL('public/index.html',root)));return;}
   send(res,404,{error:'Not found'});
  }catch(e){const timeout=e.name==='TimeoutError';send(res,timeout?504:e.status||500,{error:timeout?'通信がタイムアウトしました。保存されたか確認するため再読み込みしてください。':e.status?e.message:'処理に失敗しました'});}});
