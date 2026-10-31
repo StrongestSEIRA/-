@@ -16,30 +16,31 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
   const r=await fetcher(url+path,{method:method||(body===undefined?'GET':'POST'),headers:{apikey:key,...(token?{Authorization:`Bearer ${token}`} : {}),'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(15000)});
   const d=r.status===204?{}:await r.json();
   if(!r.ok){
+   const code=typeof d.error_code==='string'?d.error_code:typeof d.code==='string'?d.code:undefined;
    let status=502,message='Supabaseへの接続に失敗しました';
-   if(d.code==='40001'){status=409;message='別の画面で更新されました。再読み込みしてください。';}
+   if(code==='40001'){status=409;message='別の画面で更新されました。再読み込みしてください。';}
    else if(r.status===429){
     status=429;
     message='認証サービスがリクエストを制限しています。解除時刻は確認できません。';
-    let code='auth_rate_limited';
+    let rateCode='auth_rate_limited';
     const retryHeader=r.headers.get('retry-after');
     let retryAfter=retryHeader&&/^\d+$/.test(retryHeader)?Number(retryHeader):retryHeader?Math.ceil((Date.parse(retryHeader)-Date.now())/1000):undefined;
     const frequency=typeof d.msg==='string'?d.msg:typeof d.message==='string'?d.message:'';
     const seconds=frequency.match(/after\s+(\d+)\s+seconds?/i);
-    if(d.code==='over_email_send_rate_limit'){
-     if(seconds){code='email_send_cooldown';message='このメールアドレスへの再送間隔が短すぎます。';if(!Number.isFinite(retryAfter))retryAfter=Number(seconds[1]);}
-     else if(/^email rate limit exceeded[.!]?$/i.test(frequency.trim())){code='email_delivery_quota';message='メール配信サービス全体の送信枠に達しました。標準の配信枠は非常に少なく、2回の送信でも上限に達する場合があります。';}
-     else{code='email_rate_limited';message='メール配信サービスが送信を制限しています。送信枠と再送間隔のどちらによる制限かは確認できません。';}
+    if(code==='over_email_send_rate_limit'){
+     if(seconds){rateCode='email_send_cooldown';message='このメールアドレスへの再送間隔が短すぎます。';if(!Number.isFinite(retryAfter))retryAfter=Number(seconds[1]);}
+     else if(/^email rate limit exceeded[.!]?$/i.test(frequency.trim())){rateCode='email_delivery_quota';message='メール配信サービス全体の送信枠に達しました。標準の配信枠は非常に少なく、2回の送信でも上限に達する場合があります。';}
+     else{rateCode='email_rate_limited';message='メール配信サービスが送信を制限しています。送信枠と再送間隔のどちらによる制限かは確認できません。';}
     }
-    const e=Error(message);e.status=status;e.code=code;
+    const e=Error(message);e.status=status;e.code=rateCode;
     if(Number.isFinite(retryAfter)&&retryAfter>0&&retryAfter<=86400)e.retryAfterSeconds=Math.ceil(retryAfter);
     throw e;
    }
-   else if(d.code==='invalid_credentials'||path.includes('grant_type=password')&&r.status===400){status=401;message='メールアドレスまたはパスワードが違います。';}
-   else if(d.code==='email_not_confirmed'){status=403;message='メールアドレスの確認が必要です。確認メールのリンクを開いてからログインしてください。';}
-   else if(d.code==='email_address_not_authorized'){status=400;message='この宛先には標準メール配信から送れません。管理者によるメール配信設定が必要です。';}
-   else if(d.code==='weak_password'){status=400;message='より長く、推測されにくいパスワードを指定してください。';}
-   else if(d.code==='otp_expired'||path.startsWith('/auth/v1/verify')&&[400,401,403,422].includes(r.status)){status=400;message='コードが違うか期限切れです。最後に届いたメールの数字を入力してください。';}
+   else if(code==='invalid_credentials'){status=401;message='メールアドレスまたはパスワードが違います。';}
+   else if(code==='email_not_confirmed'){status=403;message='メールアドレスの確認が必要です。確認メールのリンクを開いてからログインしてください。';}
+   else if(code==='email_address_not_authorized'){status=400;message='この宛先には標準メール配信から送れません。管理者によるメール配信設定が必要です。';}
+   else if(code==='weak_password'){status=400;message='より長く、推測されにくいパスワードを指定してください。';}
+   else if(code==='otp_expired'||path.startsWith('/auth/v1/verify')&&[400,401,403,422].includes(r.status)){status=400;message='コードが違うか期限切れです。最後に届いたメールの数字を入力してください。';}
    else if(path.includes('grant_type=refresh_token')&&[400,401,403].includes(r.status)){status=401;message='ログインの有効期限が切れました。再度ログインしてください。';}
    else if(r.status===401){status=401;message='ログインの有効期限が切れました。再度ログインしてください。';}
    const e=Error(message);e.status=status;throw e;

@@ -70,3 +70,19 @@ test('recovery acknowledgement does not claim confirmed mail delivery; unauthori
   reject=true;const denied=await post(base,'/api/session',{action:'signup',email:'other@example.com',password:fixturePassword});assert.equal(denied.status,400);const error=await denied.json();assert.match(error.error,/この宛先には標準メール配信から送れません/);assert.ok(!error.error.includes('private-recipient'));
  });
 });
+test('unconfirmed email is reported as confirmation required, not incorrectly as wrong password',async()=>{
+ let calls=0;await running({fetcher:async(url)=>{calls++;assert.ok(url.includes('grant_type=password'));return Response.json({code:400,error_code:'email_not_confirmed',msg:'Email not confirmed'},{status:400});}},async base=>{
+  const r=await post(base,'/api/session',{action:'login',email:'reader@example.com',password:fixturePassword});assert.equal(r.status,403);assert.match((await r.json()).error,/メールアドレスの確認が必要/);assert.equal(r.headers.getSetCookie().length,0);assert.equal(calls,1);
+ });
+});
+
+test('numeric HTTP code with Supabase error_code preserves unauthorized email and wrong password diagnostics',async()=>{
+ for(const c of [{upstream:{code:400,error_code:'email_address_not_authorized',msg:'private-recipient@example.com is not authorized'},action:'signup',status:400,expected:/この宛先には標準メール配信から送れません/},{upstream:{code:400,error_code:'invalid_credentials',msg:'Invalid login credentials'},action:'login',status:401,expected:/メールアドレスまたはパスワード/}]){
+  await running({fetcher:async()=>Response.json(c.upstream,{status:400})},async base=>{const r=await post(base,'/api/session',{action:c.action,email:'reader@example.com',password:fixturePassword});assert.equal(r.status,c.status);const d=await r.json();assert.match(d.error,c.expected);assert.ok(!d.error.includes('private-recipient'));});
+ }
+});
+test('project-configured signup without email confirmation establishes a password session via public API',async()=>{
+ const calls=[];await running({fetcher:async(url,init)=>{calls.push({url,init});assert.equal(init.headers.apikey,config.publicKey);if(url.includes('/signup?'))return Response.json({access_token:'new-access',refresh_token:'new-refresh',expires_in:3600,user:{id:'new-reader'}});return Response.json({id:'new-reader',email:'reader@example.com'});}},async base=>{
+  const r=await post(base,'/api/session',{action:'signup',email:'reader@example.com',password:fixturePassword});assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true});const account=await fetch(base+'/api/account',{headers:{Cookie:cookieHeader(r)}});assert.equal(account.status,200);assert.equal((await account.json()).id,'new-reader');assert.ok(calls.every(c=>!c.url.includes('/otp')&&!c.url.includes('/recover')&&!c.url.includes('/admin/')));assert.ok(!JSON.stringify(calls[0].init.body).includes('email_confirm'));
+ });
+});
