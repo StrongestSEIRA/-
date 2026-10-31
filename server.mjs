@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {createRegistration} from './registration.mjs';
 import {searchBooks} from './metadata.mjs';
 import {createCoverStore,COVER_LIMIT} from './covers.mjs';
 import {readFile,mkdir,writeFile,rename} from 'node:fs/promises';
@@ -43,11 +44,12 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
    else if(code==='otp_expired'||path.startsWith('/auth/v1/verify')&&[400,401,403,422].includes(r.status)){status=400;message='コードが違うか期限切れです。最後に届いたメールの数字を入力してください。';}
    else if(path.includes('grant_type=refresh_token')&&[400,401,403].includes(r.status)){status=401;message='ログインの有効期限が切れました。再度ログインしてください。';}
    else if(r.status===401){status=401;message='ログインの有効期限が切れました。再度ログインしてください。';}
-   const e=Error(message);e.status=status;throw e;
+   const e=Error(message);e.status=status;e.authCode=code;throw e;
   }
   return d;
  }
 
+ const register=createRegistration({api,secretKey});
  async function rpc(owner,action,payload={}){return api('/rest/v1/rpc/shiori_gateway',{p_owner:owner,p_action:action,p_payload:payload},secretKey,secretKey.startsWith('eyJ')?secretKey:undefined);}
  async function snapshot(owner){if(mode==='supabase'){const r=await rpc(owner,'root');return {books:r?.data?.books||[],revision:r?.version||0};}try{return JSON.parse(await readFile(new URL('library.json',dataDir),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;return {books:[],revision:0};}}
  return http.createServer(async(req,res)=>{try{
@@ -91,8 +93,8 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
     if(typeof body.password!=='string'||!body.password||Buffer.byteLength(body.password,'utf8')>1024)return send(res,400,{error:'パスワードを入力してください。'});
     if(body.action==='signup'){
      if(!validNewPassword(body.password))return send(res,400,{error:'パスワードは12文字以上、UTF-8で72バイト以内にしてください。'});
-     session=await api('/auth/v1/signup?redirect_to='+encodeURIComponent(new URL('/',appUrl).href),{email:body.email,password:body.password});
-     if(!session.access_token)return send(res,200,{signupRequested:true});
+     const forwarded=typeof req.headers['x-forwarded-for']==='string'?req.headers['x-forwarded-for'].split(',').at(-1).trim():'';
+     session=await register(body.email,body.password,forwarded||req.socket.remoteAddress||'unknown');
     }else session=await api('/auth/v1/token?grant_type=password',{email:body.email,password:body.password});
    }else if(body.accessToken){
     if(typeof body.accessToken!=='string')return send(res,400,{error:'ログインリンクが無効です。'});

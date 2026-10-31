@@ -1,0 +1,35 @@
+import {createHash} from 'node:crypto';
+// User-approved application policy: registration does not prove email ownership.
+export function createRegistration({api,secretKey}){
+ const attempts=new Map();let settingsCache;
+ const admin=(path,body,method)=>api('/auth/v1/admin/'+path,body,secretKey,secretKey.startsWith('eyJ')?secretKey:undefined,method);
+ function limit(email,ip){
+  const now=Date.now();for(const [key,value]of attempts)if(value.until<=now)attempts.delete(key);
+  for(const [kind,value,max,window]of [['email',email.toLowerCase(),5,15*60000],['ip',ip,15,10*60000]]){
+   const key=kind+createHash('sha256').update(value).digest('hex');const entry=attempts.get(key)||{count:0,until:now+window};
+   if(entry.count>=max)throw Object.assign(Error('登録の試行が続いています。時間をおいてから再試行してください。'),{status:429,retryAfterSeconds:Math.ceil((entry.until-now)/1000)});
+   entry.count++;attempts.set(key,entry);
+  }
+  if(attempts.size>10000)attempts.delete(attempts.keys().next().value);
+ }
+ async function settings(){if(!settingsCache||settingsCache.until<Date.now())settingsCache={data:await api('/auth/v1/settings'),until:Date.now()+30000};return settingsCache.data;}
+ return async function register(email,password,ip){
+  limit(email,ip);
+  const config=await settings();if(config.disable_signup===true)throw Object.assign(Error('現在、新規登録を受け付けていません。'),{status:403});
+  if(config.external?.email===false)throw Object.assign(Error('メールアドレスでの登録は現在利用できません。'),{status:403});
+  try{await admin('users',{email,password,email_confirm:true,role:'authenticated'});}
+  catch(e){if(!['email_exists','user_already_exists'].includes(e.authCode))throw e;}
+  const login=()=>api('/auth/v1/token?grant_type=password',{email,password});
+  try{return await login();}
+  catch(e){
+   if(e.authCode!=='email_not_confirmed')throw e;
+   // GoTrue verifies the submitted password BEFORE returning email_not_confirmed.
+   // Only that proof permits completing an existing pending registration.
+   const data=await admin('users?filter='+encodeURIComponent(email)+'&page=1&per_page=100');
+   const matches=(data.users||[]).filter(u=>typeof u.email==='string'&&u.email.toLowerCase()===email.toLowerCase()&&!u.is_sso_user);
+   if(matches.length!==1||!matches[0].id)throw Object.assign(Error('登録情報を確認できませんでした。管理者にお問い合わせください。'),{status:409});
+   await admin('users/'+encodeURIComponent(matches[0].id),{email_confirm:true},'PUT');
+   return login();
+  }
+ };
+}

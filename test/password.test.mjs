@@ -20,12 +20,11 @@ test('password login uses public auth API, returns only HttpOnly secure cookies 
   assert.ok(paths.every(p=>!p.includes('/otp')&&!p.includes('/recover')&&!p.includes('/signup')));
  });
 });
-test('wrong password is rejected generically; signup validates before public signup and preserves email confirmation',async()=>{
- let calls=0;await running({fetcher:async(url,init)=>{calls++;if(url.includes('grant_type=password'))return Response.json({code:'invalid_credentials'},{status:400});assert.ok(url.includes('/auth/v1/signup?'));assert.equal(init.headers.apikey,config.publicKey);assert.ok(!('email_confirm' in JSON.parse(init.body)));return Response.json({id:'new-user'});}},async base=>{
+test('signup validates input and creates a no-email account only on the server; wrong password stays generic',async()=>{
+ let calls=0,created=false;await running({fetcher:async(url,init)=>{calls++;if(url.endsWith('/settings'))return Response.json({disable_signup:false,external:{email:true},mailer_autoconfirm:false});if(url.endsWith('/admin/users')){assert.equal(init.headers.apikey,config.secretKey);assert.equal(JSON.parse(init.body).email_confirm,true);created=true;return Response.json({id:'new-user'});}if(!created)return Response.json({code:400,error_code:'invalid_credentials'},{status:400});return Response.json({access_token:'new-access',refresh_token:'new-refresh',expires_in:3600});}},async base=>{
   const wrong=await post(base,'/api/session',{action:'login',email:'reader@example.com',password:fixturePassword});assert.equal(wrong.status,401);assert.equal(wrong.headers.getSetCookie().length,0);assert.match((await wrong.json()).error,/メールアドレスまたはパスワード/);
-  for(const password of ['short','x'.repeat(73)])assert.equal((await post(base,'/api/session',{action:'signup',email:'reader@example.com',password})).status,400);
-  assert.equal(calls,1);
-  const signup=await post(base,'/api/session',{action:'signup',email:'reader@example.com',password:fixturePassword});assert.deepEqual(await signup.json(),{signupRequested:true});assert.equal(signup.headers.getSetCookie().length,0);assert.equal(calls,2);
+  for(const password of ['short','x'.repeat(73)])assert.equal((await post(base,'/api/session',{action:'signup',email:'reader@example.com',password})).status,400);assert.equal(calls,1);
+  const signup=await post(base,'/api/session',{action:'signup',email:'reader@example.com',password:fixturePassword});assert.equal(signup.status,200);assert.deepEqual(await signup.json(),{ok:true});assert.ok(signup.headers.getSetCookie().some(s=>s.startsWith('shiori_refresh=')));assert.equal(calls,4);
  });
 });
 test('expired session refreshes once for concurrent requests without email or password',async()=>{
@@ -59,15 +58,15 @@ test('old email-only login pages cannot send additional login mail after passwor
   const r=await post(base,'/api/session',{action:'send',email:'reader@example.com'});assert.equal(r.status,410);assert.match((await r.json()).error,/再読み込み/);assert.equal(calls,0);
  });
 });
-test('duplicate signup success does not claim mail delivery or overwrite an existing password',async()=>{
- const calls=[];await running({fetcher:async(url,init)=>{calls.push({url,init});return Response.json({id:'obfuscated-user',identities:[],email_confirmed_at:null});}},async base=>{
-  const r=await post(base,'/api/session',{action:'signup',email:'existing@example.com',password:fixturePassword});assert.equal(r.status,200);assert.deepEqual(await r.json(),{signupRequested:true});assert.equal(r.headers.getSetCookie().length,0);assert.equal(calls.length,1);assert.ok(calls[0].url.includes('/signup?'));assert.equal(calls[0].init.method,'POST');assert.equal(calls[0].init.headers.apikey,config.publicKey);
+test('duplicate signup with incorrect password does not overwrite an existing account',async()=>{
+ const calls=[];await running({fetcher:async(url,init)=>{calls.push({url,init});if(url.endsWith('/settings'))return Response.json({disable_signup:false,external:{email:true}});if(url.endsWith('/admin/users'))return Response.json({code:422,error_code:'email_exists'},{status:422});return Response.json({code:400,error_code:'invalid_credentials'},{status:400});}},async base=>{
+  const r=await post(base,'/api/session',{action:'signup',email:'existing@example.com',password:fixturePassword});assert.equal(r.status,401);assert.equal(r.headers.getSetCookie().length,0);assert.equal(calls.length,3);assert.ok(!calls.some(c=>c.init.method==='PUT'));
  });
 });
 test('recovery acknowledgement does not claim confirmed mail delivery; unauthorized destination is actionable and redacted',async()=>{
  let reject=false;const calls=[];await running({fetcher:async(url,init)=>{calls.push({url,init});return reject?Response.json({code:'email_address_not_authorized',msg:'private-recipient@example.com is not authorized'},{status:400}):Response.json({});}},async base=>{
   const r=await post(base,'/api/session',{action:'recover',email:'existing@example.com'});assert.equal(r.status,200);assert.deepEqual(await r.json(),{recoveryRequested:true});assert.ok(calls[0].url.includes('/recover?'));assert.deepEqual(JSON.parse(calls[0].init.body),{email:'existing@example.com'});
-  reject=true;const denied=await post(base,'/api/session',{action:'signup',email:'other@example.com',password:fixturePassword});assert.equal(denied.status,400);const error=await denied.json();assert.match(error.error,/この宛先には標準メール配信から送れません/);assert.ok(!error.error.includes('private-recipient'));
+  reject=true;const denied=await post(base,'/api/session',{action:'recover',email:'other@example.com'});assert.equal(denied.status,400);const error=await denied.json();assert.match(error.error,/この宛先には標準メール配信から送れません/);assert.ok(!error.error.includes('private-recipient'));
  });
 });
 test('unconfirmed email is reported as confirmation required, not incorrectly as wrong password',async()=>{
@@ -77,12 +76,12 @@ test('unconfirmed email is reported as confirmation required, not incorrectly as
 });
 
 test('numeric HTTP code with Supabase error_code preserves unauthorized email and wrong password diagnostics',async()=>{
- for(const c of [{upstream:{code:400,error_code:'email_address_not_authorized',msg:'private-recipient@example.com is not authorized'},action:'signup',status:400,expected:/この宛先には標準メール配信から送れません/},{upstream:{code:400,error_code:'invalid_credentials',msg:'Invalid login credentials'},action:'login',status:401,expected:/メールアドレスまたはパスワード/}]){
+ for(const c of [{upstream:{code:400,error_code:'email_address_not_authorized',msg:'private-recipient@example.com is not authorized'},action:'recover',status:400,expected:/この宛先には標準メール配信から送れません/},{upstream:{code:400,error_code:'invalid_credentials',msg:'Invalid login credentials'},action:'login',status:401,expected:/メールアドレスまたはパスワード/}]){
   await running({fetcher:async()=>Response.json(c.upstream,{status:400})},async base=>{const r=await post(base,'/api/session',{action:c.action,email:'reader@example.com',password:fixturePassword});assert.equal(r.status,c.status);const d=await r.json();assert.match(d.error,c.expected);assert.ok(!d.error.includes('private-recipient'));});
  }
 });
-test('project-configured signup without email confirmation establishes a password session via public API',async()=>{
- const calls=[];await running({fetcher:async(url,init)=>{calls.push({url,init});assert.equal(init.headers.apikey,config.publicKey);if(url.includes('/signup?'))return Response.json({access_token:'new-access',refresh_token:'new-refresh',expires_in:3600,user:{id:'new-reader'}});return Response.json({id:'new-reader',email:'reader@example.com'});}},async base=>{
-  const r=await post(base,'/api/session',{action:'signup',email:'reader@example.com',password:fixturePassword});assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true});const account=await fetch(base+'/api/account',{headers:{Cookie:cookieHeader(r)}});assert.equal(account.status,200);assert.equal((await account.json()).id,'new-reader');assert.ok(calls.every(c=>!c.url.includes('/otp')&&!c.url.includes('/recover')&&!c.url.includes('/admin/')));assert.ok(!JSON.stringify(calls[0].init.body).includes('email_confirm'));
+test('new registration works without changing the project-wide email confirmation setting',async()=>{
+ const calls=[];await running({fetcher:async(url,init)=>{calls.push({url,init});if(url.endsWith('/settings'))return Response.json({mailer_autoconfirm:false,disable_signup:false,external:{email:true}});if(url.endsWith('/admin/users')){assert.equal(init.headers.apikey,config.secretKey);assert.equal(JSON.parse(init.body).email_confirm,true);return Response.json({id:'new-reader'});}assert.equal(init.headers.apikey,config.publicKey);if(url.includes('grant_type=password'))return Response.json({access_token:'new-access',refresh_token:'new-refresh',expires_in:3600,user:{id:'new-reader'}});return Response.json({id:'new-reader',email:'reader@example.com'});}},async base=>{
+  const r=await post(base,'/api/session',{action:'signup',email:'reader@example.com',password:fixturePassword});assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true});const account=await fetch(base+'/api/account',{headers:{Cookie:cookieHeader(r)}});assert.equal(account.status,200);assert.equal((await account.json()).id,'new-reader');assert.ok(calls.every(c=>!c.url.includes('/otp')&&!c.url.includes('/recover')&&!c.url.includes('/signup?')));
  });
 });
