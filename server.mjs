@@ -1,4 +1,6 @@
 import http from 'node:http';
+import {searchBooks} from './metadata.mjs';
+import {createCoverStore,COVER_LIMIT} from './covers.mjs';
 import {readFile,mkdir,writeFile,rename} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {randomUUID,createHash} from 'node:crypto';
@@ -8,6 +10,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
  if(mode==='supabase'&&(!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url)||!publicKey||!secretKey))throw Error('Supabase URL and keys are required');
  let queue=Promise.resolve();
  const refreshes=new Map();
+ const covers=createCoverStore({mode,url,secretKey,dataDir,fetcher});
  const send=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(value));};
  async function api(path,body,key=publicKey,token,method){
   const r=await fetcher(url+path,{method:method||(body===undefined?'GET':'POST'),headers:{apikey:key,...(token?{Authorization:`Bearer ${token}`} : {}),'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(15000)});
@@ -73,7 +76,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
   }
 
   if(!['GET','HEAD'].includes(req.method)&&req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`&&req.headers.origin!==`https://${req.headers.host}`)return send(res,403,{error:'Origin rejected'});
-  let body={};if(['POST','PUT'].includes(req.method)){let chunks=[],size=0;for await(const c of req){size+=c.length;if(size>8*1024*1024)return send(res,413,{error:'データは8MB以下にしてください'});chunks.push(c);}try{body=JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{return send(res,400,{error:'Invalid JSON'});}}
+  let body={};if(['POST','PUT'].includes(req.method)&&path!=='/api/covers'){let chunks=[],size=0;for await(const c of req){size+=c.length;if(size>8*1024*1024)return send(res,413,{error:'データは8MB以下にしてください'});chunks.push(c);}try{body=JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{return send(res,400,{error:'Invalid JSON'});}}
   if(path==='/health')return send(res,200,{ok:true,storage:mode});
   if(path==='/api/session'&&req.method==='POST'&&mode==='supabase'){
    if(body.action==='verify'&&(typeof body.token!=='string'||!/^\d{6,10}$/.test(body.token.trim())))return send(res,400,{error:'メールに記載された数字のコードを入力してください。'});
@@ -138,7 +141,14 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
      else{await mkdir(dataDir,{recursive:true});const tmp=new URL(`library-${randomUUID()}.tmp`,dataDir);await writeFile(tmp,JSON.stringify(next),{mode:0o600});await rename(tmp,new URL('library.json',dataDir));}send(res,200,{revision:next.revision});};
     const work=queue.then(save);queue=work.catch(()=>{});await work;return;
    }
-   if(path==='/api/metadata'&&req.method==='POST')return send(res,200,{status:'unmatched',checkedAt:new Date().toISOString(),coverChecked:true});
+   if(path==='/api/covers'&&req.method==='POST'){
+    const chunks=[];let size=0;for await(const c of req){size+=c.length;if(size>COVER_LIMIT)return send(res,413,{error:'写真は300KB以下で保存してください。'});chunks.push(c);}
+    return send(res,201,await covers.put(user.id,Buffer.concat(chunks),req.headers['content-type']));
+   }
+   if(path.startsWith('/api/covers/')&&req.method==='GET'){
+    const bytes=await covers.get(user.id,path.slice('/api/covers/'.length));res.writeHead(200,{'Content-Type':'image/jpeg','Content-Length':bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(bytes);return;
+   }
+   if(path==='/api/metadata'&&req.method==='POST')return send(res,200,await searchBooks(body,fetcher));
    return send(res,404,{error:'Not found'});
   }
   if(path==='/auth.js'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-store'});res.end(await readFile(new URL('public/auth.js',root)));return;}
