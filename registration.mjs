@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-// User-approved application policy: registration does not prove email ownership.
+// Legacy compatibility does not prove mailbox ownership; verified rollout needs provider confirmation enabled.
 export function createRegistration({api,secretKey,policy='legacy'}){
  if(!['legacy','verified','closed'].includes(policy))throw Error('Invalid registration policy');
  const attempts=new Map();let settingsCache;
@@ -13,13 +13,18 @@ export function createRegistration({api,secretKey,policy='legacy'}){
   }
   if(attempts.size>10000)attempts.delete(attempts.keys().next().value);
  }
- async function settings(){if(!settingsCache||settingsCache.until<Date.now())settingsCache={data:await api('/auth/v1/settings'),until:Date.now()+30000};return settingsCache.data;}
+ async function settings(fresh=false){if(fresh||!settingsCache||settingsCache.until<Date.now())settingsCache={data:await api('/auth/v1/settings'),until:Date.now()+30000};return settingsCache.data;}
  return async function register(email,password,ip){
   if(policy==='closed')throw Object.assign(Error('現在、新規登録を受け付けていません。'),{status:403});
   limit(email,ip);
-  const config=await settings();if(config.disable_signup===true)throw Object.assign(Error('現在、新規登録を受け付けていません。'),{status:403});
+  const config=await settings(policy==='verified');if(config.disable_signup===true)throw Object.assign(Error('現在、新規登録を受け付けていません。'),{status:403});
   if(config.external?.email===false)throw Object.assign(Error('メールアドレスでの登録は現在利用できません。'),{status:403});
-  if(policy==='verified')return api('/auth/v1/signup',{email,password});
+  if(policy==='verified'){
+   if(config.mailer_autoconfirm!==false)throw Object.assign(Error('メール所有確認の設定を確認できないため、新規登録を停止しています。管理者にお問い合わせください。'),{status:503,code:'email_confirmation_configuration'});
+   const signup=await api('/auth/v1/signup',{email,password});
+   if(signup.access_token)throw Object.assign(Error('認証サービスの確認設定に不整合があります。管理者にお問い合わせください。'),{status:503,code:'email_confirmation_configuration'});
+   return signup;
+  }
   try{await admin('users',{email,password,email_confirm:true,role:'authenticated'});}
   catch(e){if(!['email_exists','user_already_exists'].includes(e.authCode))throw e;}
   const login=()=>api('/auth/v1/token?grant_type=password',{email,password});
