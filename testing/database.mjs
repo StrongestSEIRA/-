@@ -8,8 +8,8 @@ export async function isolatedDatabase(){
  try{
   await pool.query(`DO $$ BEGIN CREATE ROLE anon; EXCEPTION WHEN duplicate_object THEN NULL; END $$; DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL; END $$; DO $$ BEGIN CREATE ROLE service_role; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
    CREATE SCHEMA storage; CREATE TABLE storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);`);
-  await pool.query(await readFile(new URL('../../db/schema.sql',import.meta.url),'utf8'));
-  return {pool,async apply(file){await pool.query(await readFile(new URL('../../'+file,import.meta.url),'utf8'));},async close(){await pool.end();await admin.query('DROP DATABASE "'+name+'"');await admin.end();}};
+  await pool.query(await readFile(new URL('../db/schema.sql',import.meta.url),'utf8'));
+  return {pool,async apply(file){await pool.query(await readFile(new URL('../'+file,import.meta.url),'utf8'));},async close(){await pool.end();await admin.query('DROP DATABASE "'+name+'"');await admin.end();}};
  }catch(e){await pool.end();await admin.query('DROP DATABASE "'+name+'"');await admin.end();throw e;}
 }
 export async function serviceQuery(pool,sql,params=[]){const c=await pool.connect();try{await c.query('BEGIN');await c.query('SET LOCAL ROLE service_role');const result=await c.query(sql,params);await c.query('COMMIT');return result;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}

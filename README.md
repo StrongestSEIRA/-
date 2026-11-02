@@ -128,3 +128,5 @@ Supabaseのパスワード保存方式: https://supabase.com/docs/guides/auth/pa
 開発中の認証安全性評価と承認が必要な移行は [docs/security-review.md](docs/security-review.md) を参照してください。AUTH_REGISTRATION_POLICYの既定値はlegacyで、本番方針は自動変更しません。
 
 スナップショット保存の原子的更新・承認が必要な移行とロールバックは [docs/storage-migration.md](docs/storage-migration.md) を参照してください。
+
+開発・CIテストの実行と失敗証跡の確認は [docs/testing.md](docs/testing.md) を参照してください。通常のCIは本番Supabaseへ接続しません。

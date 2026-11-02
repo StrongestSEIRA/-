@@ -1,4 +1,4 @@
-name: SHIORI Node unit tests
+name: SHIORI checks
 
 on:
   push:
@@ -21,10 +21,17 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Run isolated Node tests (no live Supabase, no browser)
-        run: node --test test/auth.test.mjs test/auth-security.test.mjs test/covers.test.mjs test/metadata.test.mjs test/password.test.mjs test/registration.test.mjs test/server.test.mjs test/concurrency.test.mjs
+        run: npm run test:unit
+        env:
+          TEST_REPORT_DIR: test-results/unit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-results
+          path: test-results/unit/
+          retention-days: 7
 
-# Browser tests in test/*.browser.test.mjs need installed Chromium and a
-# separate job. This workflow must not be treated as full E2E coverage.
+
 
   database:
     runs-on: ubuntu-latest
@@ -48,6 +55,36 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: node --test test/database.integration.test.mjs
+      - run: npm run test:db
         env:
+          TEST_REPORT_DIR: test-results/database
           SHIORI_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/shiori_test
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: database-results
+          path: test-results/database/
+          retention-days: 7
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium matching the locked Playwright version
+        run: node node_modules/playwright-core/cli.js install --with-deps chromium
+      - run: npm run test:browser
+        env:
+          TEST_REPORT_DIR: test-results/browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-results
+          path: test-results/browser/
+          retention-days: 7

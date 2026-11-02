@@ -48,3 +48,7 @@
 ## Issue #4 原子的保存（段階導入）
 
 SNAPSHOT_WRITE_MODE=atomicではshiori_library_casがDBの版を条件に更新し、競合は409、同一Idempotency-Keyの再送は元の成功版、キーの内容改変は409。移行前の既定legacyは従来互換で、本番の切り替えは承認待ち。localモードはプロセスをまたぐファイルロックと原子的置換を使う。UIは競合・通信失敗で入力を保持し、競合バックアップを選べる。詳細はdocs/storage-migration.md。
+
+## Issue #5 継続検証
+
+unit/database/browserを分離したCIと、対応Chromiumのインストールを定義する。UIのCRUD・写真・検索・バックアップ・認証・分離・競合を合成データで検証し、失敗時のJUnit/スクリーンショット/trace/consoleを保存する。本番接続スクリプトは実行しない。詳細はdocs/testing.md。

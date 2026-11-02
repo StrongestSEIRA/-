@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createApp} from '../server.mjs';
 import {randomUUID} from 'node:crypto';
-import {isolatedDatabase,serviceQuery} from './support/database.mjs';
+import {isolatedDatabase,serviceQuery} from '../testing/database.mjs';
 test('PostgreSQL CAS serializes independent writers, deduplicates retries and preserves data through rollback',{skip:!process.env.SHIORI_TEST_DATABASE_URL},async()=>{
  const db=await isolatedDatabase();try{
   await db.apply('db/migrations/001_atomic_library.sql');await db.apply('db/migrations/001_atomic_library.sql');
