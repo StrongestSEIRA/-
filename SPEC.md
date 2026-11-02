@@ -44,3 +44,7 @@
 - refresh結果の完了後キャッシュを廃止し、refresh後もAuth userを確認する。
 - cross-site Fetch MetadataとOriginで不正な変更要求を拒否。転送IPは信頼プロキシ設定時だけ使用。
 - 脅威モデル・既存UIDを保持する移行と復旧はdocs/security-review.mdに記載。既存ユーザー再確認の本番移行・実装は別途承認が必要。
+
+## Issue #4 原子的保存（段階導入）
+
+SNAPSHOT_WRITE_MODE=atomicではshiori_library_casがDBの版を条件に更新し、競合は409、同一Idempotency-Keyの再送は元の成功版、キーの内容改変は409。移行前の既定legacyは従来互換で、本番の切り替えは承認待ち。localモードはプロセスをまたぐファイルロックと原子的置換を使う。UIは競合・通信失敗で入力を保持し、競合バックアップを選べる。詳細はdocs/storage-migration.md。

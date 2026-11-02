@@ -21,7 +21,33 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Run isolated Node tests (no live Supabase, no browser)
-        run: node --test test/auth.test.mjs test/auth-security.test.mjs test/covers.test.mjs test/metadata.test.mjs test/password.test.mjs test/registration.test.mjs test/server.test.mjs
+        run: node --test test/auth.test.mjs test/auth-security.test.mjs test/covers.test.mjs test/metadata.test.mjs test/password.test.mjs test/registration.test.mjs test/server.test.mjs test/concurrency.test.mjs
 
 # Browser tests in test/*.browser.test.mjs need installed Chromium and a
 # separate job. This workflow must not be treated as full E2E coverage.
+
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: shiori_test
+          POSTGRES_HOST_AUTH_METHOD: trust # disposable isolated CI database only
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: node --test test/database.integration.test.mjs
+        env:
+          SHIORI_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/shiori_test
