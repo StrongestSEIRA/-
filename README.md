@@ -126,3 +126,5 @@ Supabaseのパスワード保存方式: https://supabase.com/docs/guides/auth/pa
 以前からある未確認アカウントについても、誤パスワードの拒否、正しいパスワードでの確認完了、元のユーザーIDと本棚の保持を実Supabaseで検証しました。検証用データは削除済みです。
 
 開発中の認証安全性評価と承認が必要な移行は [docs/security-review.md](docs/security-review.md) を参照してください。AUTH_REGISTRATION_POLICYの既定値はlegacyで、本番方針は自動変更しません。
+
+スナップショット保存の原子的更新・承認が必要な移行とロールバックは [docs/storage-migration.md](docs/storage-migration.md) を参照してください。

@@ -1,15 +1,18 @@
 import http from 'node:http';
+import {localLibrary} from './local-library.mjs';
 import {hasRecentOtpProof,clientAddress} from './auth-security.mjs';
 import {createRegistration} from './registration.mjs';
 import {searchBooks} from './metadata.mjs';
 import {createCoverStore,COVER_LIMIT} from './covers.mjs';
-import {readFile,mkdir,writeFile,rename} from 'node:fs/promises';
+import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {randomUUID,createHash} from 'node:crypto';
 const root=new URL('./',import.meta.url);
-export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir=new URL('.data/',root),appUrl=process.env.RENDER_EXTERNAL_URL||'http://127.0.0.1:3000',fetcher=fetch,registrationPolicy=process.env.AUTH_REGISTRATION_POLICY||'legacy',trustProxy=process.env.TRUST_PROXY==='true'||process.env.RENDER==='true'}={}) {
+export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir=new URL('.data/',root),appUrl=process.env.RENDER_EXTERNAL_URL||'http://127.0.0.1:3000',fetcher=fetch,registrationPolicy=process.env.AUTH_REGISTRATION_POLICY||'legacy',trustProxy=process.env.TRUST_PROXY==='true'||process.env.RENDER==='true',snapshotWriteMode=process.env.SNAPSHOT_WRITE_MODE||'legacy'}={}) {
+ if(!['legacy','atomic'].includes(snapshotWriteMode))throw Error('Invalid SNAPSHOT_WRITE_MODE');
  if(!['local','supabase'].includes(mode))throw Error('Invalid STORAGE_MODE');
  if(mode==='supabase'&&(!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url)||!publicKey||!secretKey))throw Error('Supabase URL and keys are required');
+ const local=localLibrary(dataDir);
  let queue=Promise.resolve();
  const refreshes=new Map();
  const covers=createCoverStore({mode,url,secretKey,dataDir,fetcher});
@@ -52,7 +55,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
 
  const register=createRegistration({api,secretKey,policy:registrationPolicy});
  async function rpc(owner,action,payload={}){return api('/rest/v1/rpc/shiori_gateway',{p_owner:owner,p_action:action,p_payload:payload},secretKey,secretKey.startsWith('eyJ')?secretKey:undefined);}
- async function snapshot(owner){if(mode==='supabase'){const r=await rpc(owner,'root');return {books:r?.data?.books||[],revision:r?.version||0};}try{return JSON.parse(await readFile(new URL('library.json',dataDir),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;return {books:[],revision:0};}}
+ async function snapshot(owner){if(mode==='supabase'){const r=await rpc(owner,'root');return {books:r?.data?.books||[],revision:r?.version||0};}return local.snapshot();}
  return http.createServer(async(req,res)=>{try{
   const path=new URL(req.url,'http://localhost').pathname;
   const secure=req.socket.encrypted||process.env.COOKIE_SECURE==='true'||appUrl.startsWith('https://')?'; Secure':'';
@@ -152,10 +155,19 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
    if(path==='/api/library'&&req.method==='PUT'){
     const safeId=s=>typeof s==='string'&&/^[a-zA-Z0-9_-]{1,200}$/.test(s);
     if(!Number.isSafeInteger(body.revision)||!Array.isArray(body.books)||body.books.length>10000||!body.books.every(b=>b&&safeId(b.id)&&typeof b.title==='string'&&typeof b.author==='string'&&typeof b.date==='string'&&typeof b.summary==='string'&&Array.isArray(b.tags)&&b.tags.every(t=>typeof t==='string')&&Array.isArray(b.notes)&&b.notes.every(n=>n&&safeId(n.id)&&typeof n.text==='string'&&Array.isArray(n.tags)&&n.tags.every(t=>typeof t==='string')&&(!n.links||n.links.every(safeId))))||new Set(body.books.map(b=>b.id)).size!==body.books.length)return send(res,400,{error:'書籍データの形式が正しくありません'});
-    const save=async()=>{const old=await snapshot(user.id);if(old.revision!==body.revision)return send(res,409,{error:'別の画面で更新されました。再読み込みしてください。'});const next={books:body.books,revision:old.revision+1};
-     if(mode==='supabase')await rpc(user.id,'apply',{operations:[{kind:'roots',action:old.revision?'replace':'create',version:old.revision,data:{books:body.books}}]});
-     else{await mkdir(dataDir,{recursive:true});const tmp=new URL(`library-${randomUUID()}.tmp`,dataDir);await writeFile(tmp,JSON.stringify(next),{mode:0o600});await rename(tmp,new URL('library.json',dataDir));}send(res,200,{revision:next.revision});};
-    const work=queue.then(save);queue=work.catch(()=>{});await work;return;
+    const key=req.headers['idempotency-key']||randomUUID();
+    if(typeof key!=='string'||!/^[A-Za-z0-9_-]{8,128}$/.test(key))return send(res,400,{error:'保存要求のIDが正しくありません。'});
+    const save=async()=>{
+     let result;
+     if(mode==='local')result=await local.save(body.books,body.revision,key);
+     else if(snapshotWriteMode==='atomic')result=await api('/rest/v1/rpc/shiori_library_cas',{p_owner:user.id,p_revision:body.revision,p_books:body.books,p_request_id:key},secretKey,secretKey.startsWith('eyJ')?secretKey:undefined);
+     else{const old=await snapshot(user.id);if(old.revision!==body.revision)result={status:'conflict'};else{await rpc(user.id,'apply',{operations:[{kind:'roots',action:old.revision?'replace':'create',version:old.revision,data:{books:body.books}}]});result={status:'ok',revision:old.revision+1};}}
+     if(result.status==='conflict')return send(res,409,{error:'別の端末で更新されました。入力内容を残しているので、バックアップしてから最新の本棚を確認してください。',code:'revision_conflict'});
+     if(result.status==='idempotency_mismatch')return send(res,409,{error:'同じ保存要求のIDに異なる内容が指定されました。',code:'idempotency_mismatch'});
+     if(result.status!=='ok')return send(res,400,{error:'保存要求を処理できませんでした。'});
+     send(res,200,{revision:result.revision,...(result.replayed?{replayed:true}:{})});
+    };
+    if(mode==='supabase'&&snapshotWriteMode==='legacy'){const work=queue.then(save);queue=work.catch(()=>{});await work;}else await save();return;
    }
    if(path==='/api/covers'&&req.method==='POST'){
     const chunks=[];let size=0;for await(const c of req){size+=c.length;if(size>COVER_LIMIT)return send(res,413,{error:'写真は300KB以下で保存してください。'});chunks.push(c);}
