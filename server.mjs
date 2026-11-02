@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {handleRecords} from './records-api.mjs';
 import {localLibrary} from './local-library.mjs';
 import {hasRecentOtpProof,clientAddress} from './auth-security.mjs';
 import {createRegistration} from './registration.mjs';
@@ -8,7 +9,8 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {randomUUID,createHash} from 'node:crypto';
 const root=new URL('./',import.meta.url);
-export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir=new URL('.data/',root),appUrl=process.env.RENDER_EXTERNAL_URL||'http://127.0.0.1:3000',fetcher=fetch,registrationPolicy=process.env.AUTH_REGISTRATION_POLICY||'legacy',trustProxy=process.env.TRUST_PROXY==='true'||process.env.RENDER==='true',snapshotWriteMode=process.env.SNAPSHOT_WRITE_MODE||'legacy'}={}) {
+export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir=new URL('.data/',root),appUrl=process.env.RENDER_EXTERNAL_URL||'http://127.0.0.1:3000',fetcher=fetch,registrationPolicy=process.env.AUTH_REGISTRATION_POLICY||'legacy',trustProxy=process.env.TRUST_PROXY==='true'||process.env.RENDER==='true',libraryStorage=process.env.LIBRARY_STORAGE||'snapshot',snapshotWriteMode=process.env.SNAPSHOT_WRITE_MODE||'legacy'}={}) {
+ if(!['snapshot','records'].includes(libraryStorage)||libraryStorage==='records'&&mode!=='supabase')throw Error('LIBRARY_STORAGE=records requires Supabase');
  if(!['legacy','atomic'].includes(snapshotWriteMode))throw Error('Invalid SNAPSHOT_WRITE_MODE');
  if(!['local','supabase'].includes(mode))throw Error('Invalid STORAGE_MODE');
  if(mode==='supabase'&&(!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url)||!publicKey||!secretKey))throw Error('Supabase URL and keys are required');
@@ -23,7 +25,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
   if(!r.ok){
    const code=typeof d.error_code==='string'?d.error_code:typeof d.code==='string'?d.code:undefined;
    let status=502,message='Supabaseへの接続に失敗しました';
-   if(code==='40001'){status=409;message='別の画面で更新されました。再読み込みしてください。';}
+   if(code==='40001'||code==='PT409'){status=409;message='別の画面で更新されました。再読み込みしてください。';}
    else if(r.status===429){
     status=429;
     message='認証サービスがリクエストを制限しています。解除時刻は確認できません。';
@@ -85,7 +87,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
 
   if(!['GET','HEAD'].includes(req.method)&&req.headers['sec-fetch-site']==='cross-site')return send(res,403,{error:'別のサイトからの操作は受け付けません。'});
   if(!['GET','HEAD'].includes(req.method)&&req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`&&req.headers.origin!==`https://${req.headers.host}`)return send(res,403,{error:'Origin rejected'});
-  let body={};if(['POST','PUT'].includes(req.method)&&path!=='/api/covers'){let chunks=[],size=0;for await(const c of req){size+=c.length;if(size>8*1024*1024)return send(res,413,{error:'データは8MB以下にしてください'});chunks.push(c);}try{body=JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{return send(res,400,{error:'Invalid JSON'});}}
+  let body={};if(['POST','PUT','DELETE'].includes(req.method)&&path!=='/api/covers'){let chunks=[],size=0;for await(const c of req){size+=c.length;if(size>8*1024*1024)return send(res,413,{error:'データは8MB以下にしてください'});chunks.push(c);}try{body=JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{return send(res,400,{error:'Invalid JSON'});}}
   if(body===null||typeof body!=='object'||Array.isArray(body))return send(res,400,{error:'リクエスト形式が正しくありません。'});
   if(path==='/health')return send(res,200,{ok:true,storage:mode});
   if(path==='/api/session'&&req.method==='POST'&&mode==='supabase'){
@@ -150,7 +152,11 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
     if(session){try{await api('/auth/v1/logout?scope=local',{},publicKey,token);}catch(e){if(e.status!==401)console.warn('previous_session_revocation_unconfirmed');}setSession(session);}
     return send(res,200,{ok:true});
    }
-   if(path==='/api/account'&&req.method==='GET')return send(res,200,user);
+   if(path==='/api/account'&&req.method==='GET')return send(res,200,{...user,libraryStorage});
+   if(libraryStorage==='records'){
+    if(path==='/api/library')return send(res,410,{error:'書籍・メモ単位のAPIで保存してください。',code:'record_storage_active'});
+    if(await handleRecords({req,path,body,user,res,send,rpc:(owner,action,payload)=>api('/rest/v1/rpc/shiori_records',{p_owner:owner,p_action:action,p_payload:payload},secretKey,secretKey.startsWith('eyJ')?secretKey:undefined)}))return;
+   }
    if(path==='/api/library'&&req.method==='GET')return send(res,200,await snapshot(user.id));
    if(path==='/api/library'&&req.method==='PUT'){
     const safeId=s=>typeof s==='string'&&/^[a-zA-Z0-9_-]{1,200}$/.test(s);
@@ -179,6 +185,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
    if(path==='/api/metadata'&&req.method==='POST')return send(res,200,await searchBooks(body,fetcher));
    return send(res,404,{error:'Not found'});
   }
+  if(path==='/records.js'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-store'});res.end(await readFile(new URL('public/records.js',root)));return;}
   if(path==='/auth.js'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-store'});res.end(await readFile(new URL('public/auth.js',root)));return;}
   if(path==='/'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(await readFile(new URL('public/index.html',root)));return;}
   send(res,404,{error:'Not found'});

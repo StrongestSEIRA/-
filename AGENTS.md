@@ -27,7 +27,7 @@
 ## Current architecture
 - Node.js 24.5+ HTTP server in `server.mjs`, static UI in `public/`.
 - Local single-user data is JSON on disk. Cloud data uses Supabase Auth, a server-side gateway RPC, and storage for JPEG covers.
-- Current library API transfers an entire `books` array and a revision; normalized per-book and per-note APIs are not complete.
+- Default snapshot API transfers a `books` array with revision; optional `LIBRARY_STORAGE=records` uses independently versioned books/notes after approved migration. See docs/record-storage.md.
 - Existing tests include Node tests and Playwright-core browser tests that require a Chromium executable at `CHROMIUM_PATH` or `/usr/bin/chromium`.
 
 ## Completion report

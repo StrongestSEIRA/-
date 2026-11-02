@@ -130,3 +130,5 @@ Supabaseのパスワード保存方式: https://supabase.com/docs/guides/auth/pa
 スナップショット保存の原子的更新・承認が必要な移行とロールバックは [docs/storage-migration.md](docs/storage-migration.md) を参照してください。
 
 開発・CIテストの実行と失敗証跡の確認は [docs/testing.md](docs/testing.md) を参照してください。通常のCIは本番Supabaseへ接続しません。
+
+書籍・メモ単位の保存（既定は互換snapshot、承認後に切替）: [移行・API・容量試験・復旧手順](docs/record-storage.md)。
