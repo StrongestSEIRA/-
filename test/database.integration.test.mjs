@@ -12,7 +12,7 @@ test('PostgreSQL CAS serializes independent writers, deduplicates retries and pr
   const key=randomUUID(),first=await cas('owner-a',2,[{id:'stable'}],key),retry=await cas('owner-a',2,[{id:'stable'}],key);assert.equal(first.revision,3);assert.equal(retry.replayed,true);assert.equal(retry.revision,3);assert.equal((await cas('owner-a',2,[{id:'different'}],key)).status,'idempotency_mismatch');
   assert.equal((await cas('owner-b',0,[{id:'private'}])).status,'ok');
   const rows=await db.pool.query('SELECT owner,data,version FROM shiori_private.roots ORDER BY owner');assert.equal(rows.rows[0].version,'3');assert.equal(rows.rows[0].data.books[0].id,'stable');assert.equal(rows.rows[1].data.books[0].id,'private');
-  const c=await db.pool.connect();try{await c.query('SET ROLE authenticated');await assert.rejects(c.query('SELECT public.shiori_library_cas($1,0,$2,$3)',['owner-a','[]',randomUUID()]),e=>e.code==='42501');}finally{await c.query('RESET ROLE');c.release();}
+  const c=await db.pool.connect();try{await c.query('SET ROLE authenticated');await assert.rejects(c.query('SELECT public.shiori_library_cas($1,0,$2,$3)',['owner-a','[]',randomUUID()]),e=>e.code==='42501');}finally{await c.query('ROLLBACK');try{await c.query('RESET ROLE');}finally{c.release();}}
   let dropResponse=true;
   const fetcher=async(url,init)=>{
    if(url.endsWith('/auth/v1/user'))return Response.json({id:'http-owner',email:'test@example.com'});
@@ -33,7 +33,7 @@ test('migration can be reapplied by a non-superuser operator and restores tempor
   await db.apply('db/migrations/001_atomic_library.sql');
   await db.pool.query(`CREATE ROLE ${role} CREATEROLE; GRANT shiori_gateway_role TO ${role} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE; ALTER SCHEMA shiori_private OWNER TO ${role}; GRANT CREATE ON SCHEMA public TO ${role}; ALTER TABLE shiori_private.library_requests OWNER TO ${role}; ALTER FUNCTION public.shiori_library_cas(text,bigint,jsonb,text) OWNER TO ${role};`);created=true;
   const sql=await(await import('node:fs/promises')).readFile(new URL('../db/migrations/001_atomic_library.sql',import.meta.url),'utf8');const c=await db.pool.connect();
-  try{await c.query(`SET ROLE ${role}`);await c.query(sql);await c.query(sql);}finally{await c.query('RESET ROLE');c.release();}
+  try{await c.query(`SET ROLE ${role}`);await c.query(sql);await c.query(sql);}finally{await c.query('ROLLBACK');try{await c.query('RESET ROLE');}finally{c.release();}}
   const rights=await db.pool.query(`SELECT pg_has_role($1,'shiori_gateway_role','SET') AS can_set,has_schema_privilege('shiori_gateway_role','shiori_private','CREATE') AS can_create`,[role]);assert.equal(rights.rows[0].can_set,false);assert.equal(rights.rows[0].can_create,false);
  }finally{if(created){await db.pool.query(`DROP OWNED BY ${role} CASCADE; DROP ROLE ${role};`);}await db.close();}
 });

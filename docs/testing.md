@@ -30,3 +30,5 @@ GitHub Actionsはunit/database/browserを別ジョブにし、PRとdevelop更新
 TEST_REPORT_DIRを指定するとJUnit XMLを保存する。ブラウザ失敗時にはbrowser/<case>/failure.png、trace.zip、console.jsonを保存し、元の試験を失敗として終了する。すべてのジョブでalways()により結果を7日保持する。ローカルの生成物は.gitignore対象。スクリーンショットやtraceに入力が含まれるので、合成データの試験専用とする。
 
 node node_modules/playwright-core/cli.js show-trace <trace.zip> で追跡できる。Nodeのテスト結果ファイルを保存しても元の終了コードは維持する。意図的な失敗自己試験が成功したことと、アプリの試験に失敗があったことは区別する。
+
+Issue #6では使い捨てPostgreSQLに接続するブラウザ試験を追加（Auth/Storageはモック）。SHIORI_TEST_DATABASE_URL未指定時はこの試験を明示的にskipする。CIのbrowserジョブは専用PostgreSQLを起動して実行する。DB試験は1,000冊/10,000メモ、移行/復旧、権限、並行更新、容量/時間を確認。ブラウザでは1,000冊、50件のDOM表示、差分保存、応答喪失時の再送、別アカウントへの写真付き復元を確認する。
