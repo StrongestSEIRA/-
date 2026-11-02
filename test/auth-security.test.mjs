@@ -14,7 +14,7 @@ test('forwarding headers cannot bypass signup throttling unless the deployment e
  const req={headers:{'x-forwarded-for':'spoofed, real-client'},socket:{remoteAddress:'peer'}};assert.equal(clientAddress(req),'peer');assert.equal(clientAddress(req,true),'real-client');
 });
 test('verified/closed registration policies avoid administrative account confirmation and preserve legacy default separately',async()=>{
- const calls=[];const api=async(path)=>{calls.push(path);return path.includes('/settings')?{external:{email:true}}:{user:{id:'pending'}};};
+ const calls=[];const api=async(path)=>{calls.push(path);return path.includes('/settings')?{external:{email:true},mailer_autoconfirm:false}:{user:{id:'pending'}};};
  const verified=createRegistration({api,secretKey:'test',policy:'verified'});await verified('a@example.com','test-password','peer');assert.deepEqual(calls,['/auth/v1/settings','/auth/v1/signup']);
  const closed=createRegistration({api,secretKey:'test',policy:'closed'});await assert.rejects(closed('b@example.com','test-password','peer'),e=>e.status===403);assert.equal(calls.length,2);
 });
@@ -30,4 +30,12 @@ test('a rejected forged OTP token cannot grant reset privileges after a valid re
   return init.headers.Authorization==='Bearer verified-password-token'?Response.json({id:'reader',email:'reader@example.com'}):Response.json({code:'bad_jwt'},{status:401});
  }});await new Promise(r=>app.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${app.address().port}`,headers={Cookie:'shiori_session='+forged+'; shiori_refresh=valid-refresh'};
  try{const account=await fetch(base+'/api/account',{headers});assert.equal((await account.json()).passwordChangeRequiresCurrent,true);const change=await fetch(base+'/api/password',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({password:'new-long-password'})});assert.equal(change.status,400);assert.equal(writes,0);}finally{await new Promise(r=>app.close(r));}
+});
+
+test('verified registration fails closed for disabled or unknown provider email confirmation before signup',async()=>{
+ for(const value of [true,undefined,null,'false']){const calls=[];const register=createRegistration({policy:'verified',secretKey:'fake',api:async path=>{calls.push(path);return {external:{email:true},mailer_autoconfirm:value};}});await assert.rejects(register('test@example.com','test-password','peer'),e=>e.status===503&&e.code==='email_confirmation_configuration');assert.deepEqual(calls,['/auth/v1/settings']);}
+});
+test('verified registration reads fresh provider settings and never returns an unexpected autoconfirmed session',async()=>{
+ let auto=false,settings=0,signups=0;const register=createRegistration({policy:'verified',secretKey:'fake',api:async path=>{if(path.endsWith('/settings')){settings++;return {mailer_autoconfirm:auto};}signups++;return {user:{id:'pending'}};}});await register('one@example.com','test-password','peer');auto=true;await assert.rejects(register('two@example.com','test-password','peer'),e=>e.status===503);assert.equal(settings,2);assert.equal(signups,1);
+ const raced=createRegistration({policy:'verified',secretKey:'fake',api:async path=>path.endsWith('/settings')?{mailer_autoconfirm:false}:{access_token:'unexpected-synthetic-token'}});await assert.rejects(raced('three@example.com','test-password','peer'),e=>e.status===503);
 });

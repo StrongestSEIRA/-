@@ -39,7 +39,7 @@
 
 ## Issue #3 の検証済み変更
 
-- AUTH_REGISTRATION_POLICY=legacy/verified/closedを実装。既定はlegacyで既存方針を保持し、本番の変更は承認待ち。
+- AUTH_REGISTRATION_POLICY=legacy/verified/closedを実装。既定はlegacyで既存方針を保持し、本番の変更は承認待ち。verifiedはproviderのmailer_autoconfirm=falseを毎回確認し、不一致・不明なら503で登録を停止する。
 - 通常のパスワード変更には現パスワード再認証が必要。検証済みトークンの直近OTP認証を再設定時の例外とする。
 - refresh結果の完了後キャッシュを廃止し、refresh後もAuth userを確認する。
 - cross-site Fetch MetadataとOriginで不正な変更要求を拒否。転送IPは信頼プロキシ設定時だけ使用。
