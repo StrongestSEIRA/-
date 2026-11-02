@@ -1,0 +1,27 @@
+name: SHIORI Node unit tests
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  node-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Run isolated Node tests (no live Supabase, no browser)
+        run: node --test test/auth.test.mjs test/covers.test.mjs test/metadata.test.mjs test/password.test.mjs test/registration.test.mjs test/server.test.mjs
+
+# Browser tests in test/*.browser.test.mjs need installed Chromium and a
+# separate job. This workflow must not be treated as full E2E coverage.
