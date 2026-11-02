@@ -30,7 +30,7 @@ test('signup validates input and creates a no-email account only on the server; 
 test('expired session refreshes once for concurrent requests without email or password',async()=>{
  let refreshCount=0;
  await running({fetcher:async(url,init)=>{
-  if(url.endsWith('/user'))return Response.json({code:'bad_jwt'},{status:401});
+  if(url.endsWith('/user'))return init.headers.Authorization==='Bearer new-access'?Response.json({id:'reader',email:'reader@example.com'}):Response.json({code:'bad_jwt'},{status:401});
   assert.ok(url.includes('grant_type=refresh_token'));assert.deepEqual(JSON.parse(init.body),{refresh_token:'old-refresh'});refreshCount++;await new Promise(r=>setTimeout(r,20));return Response.json({access_token:'new-access',refresh_token:'new-refresh',expires_in:3600,user:{id:'reader',email:'reader@example.com'}});
  }},async base=>{
   const results=await Promise.all([1,2].map(()=>fetch(base+'/api/account',{headers:{Cookie:'shiori_session=expired; shiori_refresh=old-refresh'}})));
@@ -42,14 +42,16 @@ test('revoked refresh token clears cookies, rather than retrying or mailing',asy
   const r=await fetch(base+'/api/account',{headers:{Cookie:'shiori_refresh=revoked'}});assert.equal(r.status,401);assert.equal(calls,1);assert.ok(r.headers.getSetCookie().every(s=>s.includes('Max-Age=0')));
  });
 });
-test('password change requires authenticated user and uses user-scoped PUT; logout revokes refresh session',async()=>{
- const paths=[];await running({fetcher:async(url,init)=>{paths.push(url);assert.equal(init.headers.apikey,config.publicKey);assert.equal(init.headers.Authorization,'Bearer current-token');
+test('password change requires current-password proof and logout clears the rotated session',async()=>{
+ const paths=[];await running({fetcher:async(url,init)=>{paths.push(url);assert.equal(init.headers.apikey,config.publicKey);
+  if(url.includes('grant_type=password')){assert.equal(JSON.parse(init.body).password,'old-password');return Response.json({access_token:'reauth-token',refresh_token:'reauth-refresh',user:{id:'reader'}});}
   if(url.includes('/logout?'))return new Response(null,{status:204});
-  if(init.method==='PUT'){assert.deepEqual(JSON.parse(init.body),{password:fixturePassword});return Response.json({id:'reader'});}
+  if(init.method==='PUT'){assert.equal(init.headers.Authorization,'Bearer reauth-token');assert.deepEqual(JSON.parse(init.body),{password:fixturePassword});return Response.json({id:'reader'});}
   return Response.json({id:'reader',email:'reader@example.com'});
  }},async base=>{
   assert.equal((await post(base,'/api/password',{password:fixturePassword})).status,401);assert.equal(paths.length,0);
-  assert.equal((await post(base,'/api/password',{password:fixturePassword,email:'different@example.com'},'shiori_session=current-token')).status,200);
+  assert.equal((await post(base,'/api/password',{password:fixturePassword},'shiori_session=current-token')).status,400);assert.ok(!paths.some(p=>p.includes('grant_type=password')));
+  assert.equal((await post(base,'/api/password',{password:fixturePassword,currentPassword:'old-password',email:'different@example.com'},'shiori_session=current-token')).status,200);
   const r=await post(base,'/api/logout',{},'shiori_session=current-token; shiori_refresh=current-refresh');assert.equal(r.status,200);assert.ok(paths.some(p=>p.endsWith('/logout?scope=local')));assert.ok(r.headers.getSetCookie().every(s=>s.includes('Max-Age=0')));
  });
 });

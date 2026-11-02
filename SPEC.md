@@ -36,3 +36,11 @@
 
 ## 変更の完了条件
 既存データを失わず、権限境界を破らず、関連する自動テストを通過し、未確認事項を明示したPRでレビューできること。
+
+## Issue #3 の検証済み変更
+
+- AUTH_REGISTRATION_POLICY=legacy/verified/closedを実装。既定はlegacyで既存方針を保持し、本番の変更は承認待ち。
+- 通常のパスワード変更には現パスワード再認証が必要。検証済みトークンの直近OTP認証を再設定時の例外とする。
+- refresh結果の完了後キャッシュを廃止し、refresh後もAuth userを確認する。
+- cross-site Fetch MetadataとOriginで不正な変更要求を拒否。転送IPは信頼プロキシ設定時だけ使用。
+- 脅威モデル・既存UIDを保持する移行と復旧はdocs/security-review.mdに記載。既存ユーザー再確認の本番移行・実装は別途承認が必要。
