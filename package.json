@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "start": "node --use-env-proxy --env-file-if-exists=.env server.mjs",
-    "test": "node --test"
+    "test": "node scripts/run-tests.mjs all",
+    "test:unit": "node scripts/run-tests.mjs unit",
+    "test:browser": "node scripts/run-tests.mjs browser",
+    "test:db": "node scripts/run-tests.mjs db"
   },
   "engines": {
     "node": ">=24.5"

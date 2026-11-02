@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {pathToFileURL} from 'node:url';
-import {chromium} from 'playwright-core';
+import {launchBrowser,recordBrowser} from '../testing/browser.mjs';
 import {createApp} from '../server.mjs';
 test('photo-only registration survives reload, edit and portable backup without OCR or catalog requests',async()=>{
  const dir=await mkdtemp(tmpdir()+'/shiori-photo-');let metadataCalls=0;
@@ -11,10 +11,11 @@ test('photo-only registration survives reload, edit and portable backup without 
  await new Promise(r=>app.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${app.address().port}`;
  let browser;
  try{
-  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});
+  browser=await launchBrowser();
   const context=await browser.newContext({viewport:{width:390,height:844},acceptDownloads:true});
   await context.route('https://**/*',route=>route.abort());
   const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await recordBrowser('photo',page,async()=>{
   await page.goto(base);await page.locator('#add').click();
   assert.equal(await page.locator('#bookForm').count(),1);
   // A real browser-generated photo fixture avoids dependence on fonts or OCR assets.
@@ -36,6 +37,6 @@ test('photo-only registration survives reload, edit and portable backup without 
   await page.reload();await page.locator('#importFile').setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});await page.locator('.book').waitFor();
   const restored=await(await fetch(base+'/api/library')).json();assert.equal(restored.books.length,1);assert.equal(restored.books[0].title,'写真から登録した本');assert.match(restored.books[0].cover,/^\/api\/covers\//);assert.notEqual(restored.books[0].cover,stored.books[0].cover);assert.equal((await fetch(base+restored.books[0].cover)).status,200);
   assert.equal(metadataCalls,0);assert.deepEqual(errors,[]);
-  await context.close();
+  });
  }finally{if(browser)await browser.close();await new Promise(r=>app.close(r));await rm(dir,{recursive:true,force:true});}
 });
