@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {hasRecentOtpProof,clientAddress} from './auth-security.mjs';
 import {createRegistration} from './registration.mjs';
 import {searchBooks} from './metadata.mjs';
 import {createCoverStore,COVER_LIMIT} from './covers.mjs';
@@ -6,7 +7,7 @@ import {readFile,mkdir,writeFile,rename} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {randomUUID,createHash} from 'node:crypto';
 const root=new URL('./',import.meta.url);
-export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir=new URL('.data/',root),appUrl=process.env.RENDER_EXTERNAL_URL||'http://127.0.0.1:3000',fetcher=fetch}={}) {
+export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir=new URL('.data/',root),appUrl=process.env.RENDER_EXTERNAL_URL||'http://127.0.0.1:3000',fetcher=fetch,registrationPolicy=process.env.AUTH_REGISTRATION_POLICY||'legacy',trustProxy=process.env.TRUST_PROXY==='true'||process.env.RENDER==='true'}={}) {
  if(!['local','supabase'].includes(mode))throw Error('Invalid STORAGE_MODE');
  if(mode==='supabase'&&(!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url)||!publicKey||!secretKey))throw Error('Supabase URL and keys are required');
  let queue=Promise.resolve();
@@ -49,7 +50,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
   return d;
  }
 
- const register=createRegistration({api,secretKey});
+ const register=createRegistration({api,secretKey,policy:registrationPolicy});
  async function rpc(owner,action,payload={}){return api('/rest/v1/rpc/shiori_gateway',{p_owner:owner,p_action:action,p_payload:payload},secretKey,secretKey.startsWith('eyJ')?secretKey:undefined);}
  async function snapshot(owner){if(mode==='supabase'){const r=await rpc(owner,'root');return {books:r?.data?.books||[],revision:r?.version||0};}try{return JSON.parse(await readFile(new URL('library.json',dataDir),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;return {books:[],revision:0};}}
  return http.createServer(async(req,res)=>{try{
@@ -62,6 +63,7 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
    const maxAge=Number.isFinite(session.expires_in)?Math.max(1,Math.min(session.expires_in,3600)):3600;
    res.setHeader('Set-Cookie',[cookie('shiori_session',session.access_token,maxAge),cookie('shiori_refresh',session.refresh_token||'',session.refresh_token?2592000:0,'/api/'),cookie('shiori_login','',0)]);
   }
+  const activeAccessToken=()=>{const renewed=res.getHeader('Set-Cookie')?.find(s=>s.startsWith('shiori_session='));return renewed?decodeURIComponent(renewed.split(';')[0].slice(15)):readCookie('shiori_session');};
   const validEmail=email=>typeof email==='string'&&email.length<=320&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   const validNewPassword=password=>typeof password==='string'&&password.length>=12&&Buffer.byteLength(password,'utf8')<=72;
   async function currentUser(){
@@ -71,15 +73,17 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
    const fingerprint=createHash('sha256').update(refreshToken).digest('hex');
    if(!refreshes.has(fingerprint)){
     const pending=api('/auth/v1/token?grant_type=refresh_token',{refresh_token:refreshToken});refreshes.set(fingerprint,pending);
-    pending.then(()=>{setTimeout(()=>refreshes.delete(fingerprint),2000).unref();},()=>refreshes.delete(fingerprint));
+    pending.then(()=>refreshes.delete(fingerprint),()=>refreshes.delete(fingerprint));
    }
    let session;try{session=await refreshes.get(fingerprint);}catch(e){if(e.status===401)res.setHeader('Set-Cookie',[cookie('shiori_session','',0),cookie('shiori_refresh','',0,'/api/')]);throw e;}
-   const user=session.user?.id?session.user:await api('/auth/v1/user',undefined,publicKey,session.access_token);
+   const user=await api('/auth/v1/user',undefined,publicKey,session.access_token);
    setSession(session);return user;
   }
 
+  if(!['GET','HEAD'].includes(req.method)&&req.headers['sec-fetch-site']==='cross-site')return send(res,403,{error:'別のサイトからの操作は受け付けません。'});
   if(!['GET','HEAD'].includes(req.method)&&req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`&&req.headers.origin!==`https://${req.headers.host}`)return send(res,403,{error:'Origin rejected'});
   let body={};if(['POST','PUT'].includes(req.method)&&path!=='/api/covers'){let chunks=[],size=0;for await(const c of req){size+=c.length;if(size>8*1024*1024)return send(res,413,{error:'データは8MB以下にしてください'});chunks.push(c);}try{body=JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{return send(res,400,{error:'Invalid JSON'});}}
+  if(body===null||typeof body!=='object'||Array.isArray(body))return send(res,400,{error:'リクエスト形式が正しくありません。'});
   if(path==='/health')return send(res,200,{ok:true,storage:mode});
   if(path==='/api/session'&&req.method==='POST'&&mode==='supabase'){
    if(body.action==='verify'&&(typeof body.token!=='string'||!/^\d{6,10}$/.test(body.token.trim())))return send(res,400,{error:'メールに記載された数字のコードを入力してください。'});
@@ -93,8 +97,8 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
     if(typeof body.password!=='string'||!body.password||Buffer.byteLength(body.password,'utf8')>1024)return send(res,400,{error:'パスワードを入力してください。'});
     if(body.action==='signup'){
      if(!validNewPassword(body.password))return send(res,400,{error:'パスワードは12文字以上、UTF-8で72バイト以内にしてください。'});
-     const forwarded=typeof req.headers['x-forwarded-for']==='string'?req.headers['x-forwarded-for'].split(',').at(-1).trim():'';
-     session=await register(body.email,body.password,forwarded||req.socket.remoteAddress||'unknown');
+     session=await register(body.email,body.password,clientAddress(req,trustProxy));
+     if(!session.access_token)return send(res,200,{signupRequested:true});
     }else session=await api('/auth/v1/token?grant_type=password',{email:body.email,password:body.password});
    }else if(body.accessToken){
     if(typeof body.accessToken!=='string')return send(res,400,{error:'ログインリンクが無効です。'});
@@ -128,11 +132,20 @@ export function createApp({mode='local',url='',publicKey='',secretKey='',dataDir
   }
   if(path.startsWith('/api/')){
    let user={id:'local-development',name:'ローカル開発（この環境のみ）'};
-   if(mode==='supabase'){const u=await currentUser();user={id:u.id,email:u.email,name:u.email};}
+   if(mode==='supabase'){const u=await currentUser();user={id:u.id,email:u.email,name:u.email,passwordChangeRequiresCurrent:!hasRecentOtpProof(activeAccessToken())};}
    if(path==='/api/password'&&req.method==='POST'&&mode==='supabase'){
     if(!validNewPassword(body.password))return send(res,400,{error:'パスワードは12文字以上、UTF-8で72バイト以内にしてください。'});
-    const renewed=res.getHeader('Set-Cookie')?.find(s=>s.startsWith('shiori_session='));const token=renewed?decodeURIComponent(renewed.split(';')[0].slice(15)):readCookie('shiori_session');
-    await api('/auth/v1/user',{password:body.password},publicKey,token,'PUT');return send(res,200,{ok:true});
+    const token=activeAccessToken();
+    let session;
+    if(!hasRecentOtpProof(token)){
+     if(typeof body.currentPassword!=='string'||!body.currentPassword)return send(res,400,{error:'現在のパスワードを入力してください。'});
+     session=await api('/auth/v1/token?grant_type=password',{email:user.email,password:body.currentPassword});
+     const verified=session.user?.id?session.user:await api('/auth/v1/user',undefined,publicKey,session.access_token);
+     if(verified.id!==user.id)return send(res,403,{error:'アカウントを再確認してください。'});
+    }
+    await api('/auth/v1/user',{password:body.password},publicKey,session?.access_token||token,'PUT');
+    if(session){try{await api('/auth/v1/logout?scope=local',{},publicKey,token);}catch(e){if(e.status!==401)console.warn('previous_session_revocation_unconfirmed');}setSession(session);}
+    return send(res,200,{ok:true});
    }
    if(path==='/api/account'&&req.method==='GET')return send(res,200,user);
    if(path==='/api/library'&&req.method==='GET')return send(res,200,await snapshot(user.id));

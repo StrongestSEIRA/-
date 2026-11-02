@@ -50,7 +50,7 @@ SupabaseのAuthentication → URL Configuration:
 
 アクセストークンとリフレッシュトークンをHttpOnly・SameSite Cookieに保存します。公開環境はSecure付きです。リフレッシュトークンは/api/だけに送られ、JavaScript・localStorageやソースコードから参照できません。セッションが切れた際はSupabaseで更新し、通常の再ログインにメールは不要です。リフレッシュCookieの有効期間は最大30日で、Supabase側のセッション失効設定が優先されます。
 
-「ログアウト」はSupabaseの当該セッションを失効させ、アプリのCookieを削除します。パスワードの設定・変更APIは認証済みユーザーのトークンだけで実行し、別のメールアドレスを指定した書き換えは行いません。
+「ログアウト」はSupabaseの当該セッションを失効させ、アプリのCookieを削除します。パスワードの設定・変更APIは認証済みユーザーのトークンに加え、現パスワードの再認証または直近の検証済みOTP認証を要求し、別のメールアドレスを指定した書き換えは行いません。
 
 登録確認・再設定メールのリンクは、開いたブラウザでトークンを検証し、表示されたメールアドレスを明示的に確認してからセッションに変換します。再設定リンクではパスワード入力画面を開きます。旧画面のメールのみのログイン要求は410で停止し、再読み込みを案内します。
 
@@ -124,3 +124,5 @@ Supabaseのパスワード保存方式: https://supabase.com/docs/guides/auth/pa
 公開サイトを直接検証する場合は `SHIORI_TEST_URL=https://book-s-marker.onrender.com node --use-env-proxy scripts/check-external-users.mjs` を使用します。この開発環境からの公開URLへの接続は許可ドメインの反映待ちです。既定の検証は開発環境の実アプリサーバーと実Supabaseを使うもので、公開URLのデプロイ完了を保証するものではありません。
 
 以前からある未確認アカウントについても、誤パスワードの拒否、正しいパスワードでの確認完了、元のユーザーIDと本棚の保持を実Supabaseで検証しました。検証用データは削除済みです。
+
+開発中の認証安全性評価と承認が必要な移行は [docs/security-review.md](docs/security-review.md) を参照してください。AUTH_REGISTRATION_POLICYの既定値はlegacyで、本番方針は自動変更しません。

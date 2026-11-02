@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 // User-approved application policy: registration does not prove email ownership.
-export function createRegistration({api,secretKey}){
+export function createRegistration({api,secretKey,policy='legacy'}){
+ if(!['legacy','verified','closed'].includes(policy))throw Error('Invalid registration policy');
  const attempts=new Map();let settingsCache;
  const admin=(path,body,method)=>api('/auth/v1/admin/'+path,body,secretKey,secretKey.startsWith('eyJ')?secretKey:undefined,method);
  function limit(email,ip){
@@ -14,9 +15,11 @@ export function createRegistration({api,secretKey}){
  }
  async function settings(){if(!settingsCache||settingsCache.until<Date.now())settingsCache={data:await api('/auth/v1/settings'),until:Date.now()+30000};return settingsCache.data;}
  return async function register(email,password,ip){
+  if(policy==='closed')throw Object.assign(Error('現在、新規登録を受け付けていません。'),{status:403});
   limit(email,ip);
   const config=await settings();if(config.disable_signup===true)throw Object.assign(Error('現在、新規登録を受け付けていません。'),{status:403});
   if(config.external?.email===false)throw Object.assign(Error('メールアドレスでの登録は現在利用できません。'),{status:403});
+  if(policy==='verified')return api('/auth/v1/signup',{email,password});
   try{await admin('users',{email,password,email_confirm:true,role:'authenticated'});}
   catch(e){if(!['email_exists','user_already_exists'].includes(e.authCode))throw e;}
   const login=()=>api('/auth/v1/token?grant_type=password',{email,password});
